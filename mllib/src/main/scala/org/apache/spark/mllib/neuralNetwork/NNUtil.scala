@@ -19,7 +19,7 @@ package org.apache.spark.mllib.neuralNetwork
 
 import java.util.Random
 
-import breeze.linalg.{DenseVector => BDV, DenseMatrix => BDM,
+import breeze.linalg.{DenseVector => BDV, DenseMatrix => BDM, Matrix => BM,
 max => brzMax, Axis => BrzAxis, sum => brzSum}
 
 import org.apache.spark.Logging
@@ -28,60 +28,60 @@ SparseVector => SSV, DenseVector => SDV, Vector => SV, Vectors, Matrices, BLAS}
 import org.apache.spark.util.Utils
 
 object NNUtil {
-  def initializeBias(numOut: Int): SV = {
-    new SDV(new Array[Double](numOut))
+  def initializeBias(numOut: Int): BDV[Double] = {
+    BDV.zeros[Double](numOut)
   }
 
-  def initializeWeight(numIn: Int, numOut: Int): SM = {
-    SDM.zeros(numOut, numIn)
+  def initializeWeight(numIn: Int, numOut: Int): BDM[Double] = {
+    BDM.zeros[Double](numOut, numIn)
   }
 
-  def initializeWeight(numIn: Int, numOut: Int, rand: () => Double): SM = {
+  def initializeWeight(numIn: Int, numOut: Int, rand: () => Double): BDM[Double] = {
     val weight = initializeWeight(numIn, numOut)
     initializeWeight(weight, rand)
   }
 
-  def initializeWeight(w: SM, rand: () => Double): SM = {
-    for (i <- 0 until w.numRows) {
-      for (j <- 0 until w.numCols) {
+  def initializeWeight(w: BDM[Double], rand: () => Double): BDM[Double] = {
+    for (i <- 0 until w.rows) {
+      for (j <- 0 until w.cols) {
         w(i, j) = rand()
       }
     }
     w
   }
 
-  def initUniformDistWeight(numIn: Int, numOut: Int): SM = {
+  def initUniformDistWeight(numIn: Int, numOut: Int): BDM[Double] = {
     initUniformDistWeight(initializeWeight(numIn, numOut), 0.0)
   }
 
-  def initUniformDistWeight(numIn: Int, numOut: Int, scale: Double): SM = {
+  def initUniformDistWeight(numIn: Int, numOut: Int, scale: Double): BDM[Double] = {
     initUniformDistWeight(initializeWeight(numIn, numOut), scale)
   }
 
-  def initUniformDistWeight(w: SM, scale: Double): SM = {
-    val numIn = w.numCols
-    val numOut = w.numRows
+  def initUniformDistWeight(w: BDM[Double], scale: Double): BDM[Double] = {
+    val numIn = w.cols
+    val numOut = w.rows
     val s = if (scale <= 0) math.sqrt(6D / (numIn + numOut)) else scale
     initUniformDistWeight(w, -s, s)
   }
 
-  def initUniformDistWeight(numIn: Int, numOut: Int, low: Double, high: Double): SM = {
+  def initUniformDistWeight(numIn: Int, numOut: Int, low: Double, high: Double): BDM[Double] = {
     initUniformDistWeight(initializeWeight(numIn, numOut), low, high)
   }
 
-  def initUniformDistWeight(w: SM, low: Double, high: Double): SM = {
+  def initUniformDistWeight(w: BDM[Double], low: Double, high: Double): BDM[Double] = {
     initializeWeight(w, () => Utils.random.nextDouble() * (high - low) + low)
   }
 
-  def initGaussianDistWeight(numIn: Int, numOut: Int): SM = {
+  def initGaussianDistWeight(numIn: Int, numOut: Int): BDM[Double] = {
     initGaussianDistWeight(initializeWeight(numIn, numOut), 0.0)
   }
 
-  def initGaussianDistWeight(numIn: Int, numOut: Int, scale: Double): SM = {
+  def initGaussianDistWeight(numIn: Int, numOut: Int, scale: Double): BDM[Double] = {
     initGaussianDistWeight(initializeWeight(numIn, numOut), scale)
   }
 
-  def initGaussianDistWeight(weight: SM, scale: Double): SM = {
+  def initGaussianDistWeight(weight: BDM[Double], scale: Double): BDM[Double] = {
     val sd = if (scale <= 0) 0.01 else scale
     initializeWeight(weight, () => Utils.random.nextGaussian() * sd)
   }
@@ -149,24 +149,24 @@ object NNUtil {
     }
   }
 
-  def meanSquaredError(out: SM, label: SM): Double = {
-    require(label.numRows == out.numRows)
-    require(label.numCols == out.numCols)
+  def meanSquaredError(out: BM[Double], label: BM[Double]): Double = {
+    require(label.rows == out.rows)
+    require(label.cols == out.cols)
     var diff = 0D
-    for (i <- 0 until out.numRows) {
-      for (j <- 0 until out.numCols) {
+    for (i <- 0 until out.rows) {
+      for (j <- 0 until out.cols) {
         diff += math.pow(label(i, j) - out(i, j), 2)
       }
     }
-    diff / out.numRows
+    diff / out.rows
   }
 
-  def crossEntropy(out: SM, label: SM): Double = {
-    require(label.numRows == out.numRows)
-    require(label.numCols == out.numCols)
+  def crossEntropy(out: BM[Double], label: BM[Double]): Double = {
+    require(label.rows == out.rows)
+    require(label.cols == out.cols)
     var cost = 0D
-    for (i <- 0 until out.numRows) {
-      for (j <- 0 until out.numCols) {
+    for (i <- 0 until out.rows) {
+      for (j <- 0 until out.cols) {
         val a = label(i, j)
         var b = out(i, j)
         if (b == 0) {
@@ -177,6 +177,6 @@ object NNUtil {
         cost -= a * math.log(b) + (1 - a) * math.log1p(1 - b)
       }
     }
-    cost / out.numRows
+    cost / out.rows
   }
 }
