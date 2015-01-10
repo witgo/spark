@@ -22,7 +22,7 @@ import org.apache.spark.mllib.util.MnistDatasetSuite
 
 class MLPSuite extends FunSuite with MnistDatasetSuite with Matchers {
 
-  ignore("MLP") {
+  test("MLP") {
     val (data, numVisible) = mnistTrainDataset(5000)
     val topology = Array(numVisible, 500, 10)
     val nn = MLP.train(data, 20, 1000, topology, 0.01, 0.5, 0.0)

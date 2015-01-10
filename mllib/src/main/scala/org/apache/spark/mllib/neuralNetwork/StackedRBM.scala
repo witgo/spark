@@ -37,7 +37,7 @@ class StackedRBM(val innerRBMs: Array[RBM])
 
   def numOut = innerRBMs.last.numOut
 
-  def forward(visible: SM, toLayer: Int): SM = {
+  def forward(visible: BDM[Double], toLayer: Int): BDM[Double] = {
     var x = visible
     for (layer <- 0 until toLayer) {
       x = innerRBMs(layer).forward(x)
@@ -45,7 +45,7 @@ class StackedRBM(val innerRBMs: Array[RBM])
     x
   }
 
-  def forward(visible: SM): SM = {
+  def forward(visible: BDM[Double]): BDM[Double] = {
     forward(visible, numLayer)
   }
 
@@ -115,8 +115,8 @@ object StackedRBM extends Logging {
       data.mapPartitions { itr =>
         val stackedRBM = broadcast.value
         itr.map { data =>
-          val input = new SDM(data.size, 1, data.toArray)
-          val x = stackedRBM.forward(input, toLayer).toBreeze.toDenseMatrix
+          val input = new BDM(data.size, 1, data.toArray)
+          val x = stackedRBM.forward(input, toLayer)
           Vectors.fromBreeze(x(::, 0))
         }
       }
