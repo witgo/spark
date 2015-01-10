@@ -19,7 +19,8 @@ package org.apache.spark.mllib.neuralNetwork
 
 import java.util.Random
 
-import breeze.linalg.{DenseVector => BDV, DenseMatrix => BDM, Axis => BrzAxis, sum => brzSum}
+import breeze.linalg.{DenseVector => BDV, Matrix => BM, DenseMatrix => BDM,
+Axis => BrzAxis, sum => brzSum}
 
 import org.apache.spark.Logging
 import org.apache.spark.mllib.linalg.{DenseMatrix => SDM, Matrix => SM,
@@ -29,13 +30,13 @@ import NNUtil._
 
 private[mllib] trait Layer extends Serializable {
 
-  def weight: SM
+  def weight: BDM[Double]
 
-  def bias: SV
+  def bias: BDV[Double]
 
-  def numIn = weight.numCols
+  def numIn = weight.cols
 
-  def numOut = weight.numRows
+  def numOut = weight.rows
 
   def layerType: String
 
@@ -45,53 +46,53 @@ private[mllib] trait Layer extends Serializable {
     rand.setSeed(seed)
   }
 
-  def forward(input: SM): SM = {
-    val batchSize = input.numCols
-    val output = SDM.zeros(numOut, batchSize)
-    BLAS.gemm(1.0, weight, new SDM(input.numRows, input.numCols, input.toArray), 1.0, output)
-    val brzOutput = new BDM(numOut, batchSize, output.values)
-    val brzBias = bias.toBreeze
+  def forward(input: BM[Double]): BDM[Double] = {
+    val batchSize = input.cols
+    val output: BDM[Double] = weight * input
     for (i <- 0 until batchSize) {
-      brzOutput(::, i) :+= brzBias
+      output(::, i) :+= bias
     }
     computeNeuron(output)
     output
   }
 
-  def backward(input: SM, delta: SM): (SM, SV) = {
-    val gradWeight = SDM.zeros(numOut, numIn)
-    BLAS.gemm(false, true, 1.0, delta,
-      new SDM(input.numRows, input.numCols, input.toArray), 1.0, gradWeight)
-
-    val brzDelta = new BDM(delta.numRows, delta.numCols, delta.toArray)
-    val gradBias = brzSum(brzDelta, BrzAxis._1)
-
-    (gradWeight, Vectors.fromBreeze(gradBias))
+  def backward(input: BDM[Double], delta: BDM[Double]): (BDM[Double], BDV[Double]) = {
+    val gradWeight: BDM[Double] = delta * input.t
+    val gradBias = brzSum(delta, BrzAxis._1)
+    (gradWeight, gradBias)
   }
 
-  def outputError(output: SM, label: SM): SM = {
-    val delta = Matrices.fromBreeze(output.toBreeze - label.toBreeze)
+  def outputError(output: BDM[Double], label: BM[Double]): BDM[Double] = {
+
+    val delta: BDM[Double] = if (label.isInstanceOf[BDM[Double]]) {
+      output - label.asInstanceOf[BDM[Double]]
+    } else {
+      output - label.toDenseMatrix
+    }
+
     computeNeuronPrimitive(delta, output)
     delta
   }
 
-  def previousError(input: SM, previousLayer: Layer, currentDelta: SM): SM = {
-    val preDelta = weight.transposeMultiply(
-      new SDM(currentDelta.numRows, currentDelta.numCols, currentDelta.toArray))
+  def previousError(
+    input: BM[Double],
+    previousLayer: Layer,
+    currentDelta: BDM[Double]): BDM[Double] = {
+    val preDelta = weight.t * currentDelta
     previousLayer.computeNeuronPrimitive(preDelta, input)
     preDelta
   }
 
-  def computeNeuron(temp: SM): Unit
+  def computeNeuron(temp: BDM[Double]): Unit
 
-  def computeNeuronPrimitive(temp: SM, output: SM): Unit
+  def computeNeuronPrimitive(temp: BDM[Double], output: BM[Double]): Unit
 
-  protected[mllib] def sample(out: SM): SM = out
+  protected[mllib] def sample(out: BDM[Double]): BDM[Double] = out
 }
 
 private[mllib] class SigmoidLayer(
-  val weight: SM,
-  val bias: SV) extends Layer with Logging {
+  val weight: BDM[Double],
+  val bias: BDV[Double]) extends Layer with Logging {
 
   def this(numIn: Int, numOut: Int) {
     this(initUniformDistWeight(numIn, numOut, 4D * math.sqrt(6D / (numIn + numOut))),
@@ -100,32 +101,32 @@ private[mllib] class SigmoidLayer(
 
   override def layerType: String = "Sigmoid"
 
-  override def computeNeuron(temp: SM): Unit = {
-    for (i <- 0 until temp.numRows) {
-      for (j <- 0 until temp.numCols) {
+  override def computeNeuron(temp: BDM[Double]): Unit = {
+    for (i <- 0 until temp.rows) {
+      for (j <- 0 until temp.cols) {
         temp(i, j) = sigmoid(temp(i, j))
       }
     }
   }
 
   override def computeNeuronPrimitive(
-    temp: SM,
-    output: SM): Unit = {
-    for (i <- 0 until temp.numRows) {
-      for (j <- 0 until temp.numCols) {
+    temp: BDM[Double],
+    output: BM[Double]): Unit = {
+    for (i <- 0 until temp.rows) {
+      for (j <- 0 until temp.cols) {
         temp(i, j) = temp(i, j) * sigmoidPrimitive(output(i, j))
       }
     }
   }
 
-  protected[mllib] override def sample(input: SM): SM = {
+  protected[mllib] override def sample(input: BDM[Double]): BDM[Double] = {
     input.map(v => if (rand.nextDouble() < v) 1D else 0D)
   }
 }
 
 private[mllib] class TanhLayer(
-  val weight: SM,
-  val bias: SV) extends Layer with Logging {
+  val weight: BDM[Double],
+  val bias: BDV[Double]) extends Layer with Logging {
 
   def this(numIn: Int, numOut: Int) {
     this(initUniformDistWeight(numIn, numOut, math.sqrt(6D / (numIn + numOut))),
@@ -134,32 +135,32 @@ private[mllib] class TanhLayer(
 
   override def layerType: String = "Tanh"
 
-  override def computeNeuron(temp: SM): Unit = {
-    for (i <- 0 until temp.numRows) {
-      for (y <- 0 until temp.numCols) {
+  override def computeNeuron(temp: BDM[Double]): Unit = {
+    for (i <- 0 until temp.rows) {
+      for (y <- 0 until temp.cols) {
         temp(i, y) = tanh(temp(i, y))
       }
     }
   }
 
   def computeNeuronPrimitive(
-    temp: SM,
-    output: SM): Unit = {
-    for (i <- 0 until temp.numRows) {
-      for (y <- 0 until temp.numCols) {
+    temp: BDM[Double],
+    output: BM[Double]): Unit = {
+    for (i <- 0 until temp.rows) {
+      for (y <- 0 until temp.cols) {
         temp(i, y) = temp(i, y) * tanhPrimitive(output(i, y))
       }
     }
   }
 
-  protected[mllib] override def sample(input: SM): SM = {
+  protected[mllib] override def sample(input: BDM[Double]): BDM[Double] = {
     input.map(v => if (rand.nextDouble() < v) 1D else 0D)
   }
 }
 
 private[mllib] class SoftMaxLayer(
-  val weight: SM,
-  val bias: SV) extends Layer with Logging {
+  val weight: BDM[Double],
+  val bias: BDV[Double]) extends Layer with Logging {
 
   def this(numIn: Int, numOut: Int) {
     this(initializeWeight(numIn, numOut), initializeBias(numOut))
@@ -167,8 +168,8 @@ private[mllib] class SoftMaxLayer(
 
   override def layerType: String = "SoftMax"
 
-  override def computeNeuron(temp: SM): Unit = {
-    val brzTemp = temp.toBreeze.asInstanceOf[BDM[Double]]
+  override def computeNeuron(temp: BDM[Double]): Unit = {
+    val brzTemp = temp
     for (col <- 0 until brzTemp.cols) {
       softMax(brzTemp(::, col))
     }
@@ -184,8 +185,8 @@ private[mllib] class SoftMaxLayer(
   }
 
   override def computeNeuronPrimitive(
-    temp: SM,
-    output: SM): Unit = {
+    temp: BDM[Double],
+    output: BM[Double]): Unit = {
     // See: http://citeseerx.ist.psu.edu/viewdoc/summary?doi=10.1.1.49.6403
 
     //  for (i <- 0 until temp.numRows) {
@@ -195,8 +196,8 @@ private[mllib] class SoftMaxLayer(
     //  }
   }
 
-  override protected[mllib] def sample(out: SM): SM = {
-    val brzOut = out.toBreeze.asInstanceOf[BDM[Double]]
+  override protected[mllib] def sample(out: BDM[Double]): BDM[Double] = {
+    val brzOut = out
     for (j <- 0 until brzOut.cols) {
       val v = brzOut(::, j)
       var sum = 0D
@@ -220,8 +221,8 @@ private[mllib] class SoftMaxLayer(
 }
 
 private[mllib] class NoisyReLULayer(
-  val weight: SM,
-  val bias: SV) extends Layer with Logging {
+  val weight: BDM[Double],
+  val bias: BDV[Double]) extends Layer with Logging {
   def this(numIn: Int, numOut: Int) {
     this(initUniformDistWeight(numIn, numOut, 0D, 0.01),
       initializeBias(numOut))
@@ -229,9 +230,9 @@ private[mllib] class NoisyReLULayer(
 
   override def layerType: String = "NoisyReLU"
 
-  private def nReLu(tmp: SM): Unit = {
-    for (i <- 0 until tmp.numRows) {
-      for (j <- 0 until tmp.numCols) {
+  private def nReLu(tmp: BDM[Double]): Unit = {
+    for (i <- 0 until tmp.rows) {
+      for (j <- 0 until tmp.cols) {
         val v = tmp(i, j)
         val sd = sigmoid(v)
         val x = v + sd * rand.nextGaussian()
@@ -240,15 +241,15 @@ private[mllib] class NoisyReLULayer(
     }
   }
 
-  override def computeNeuron(temp: SM): Unit = {
+  override def computeNeuron(temp: BDM[Double]): Unit = {
     nReLu(temp)
   }
 
   override def computeNeuronPrimitive(
-    temp: SM,
-    output: SM): Unit = {
-    for (i <- 0 until temp.numRows) {
-      for (j <- 0 until temp.numCols)
+    temp: BDM[Double],
+    output: BM[Double]): Unit = {
+    for (i <- 0 until temp.rows) {
+      for (j <- 0 until temp.cols)
         if (output(i, j) <= 0) {
           temp(i, j) = 0
         }
@@ -257,8 +258,8 @@ private[mllib] class NoisyReLULayer(
 }
 
 private[mllib] class ReLuLayer(
-  val weight: SM,
-  val bias: SV) extends Layer with Logging {
+  val weight: BDM[Double],
+  val bias: BDV[Double]) extends Layer with Logging {
 
   def this(numIn: Int, numOut: Int) {
     this(initUniformDistWeight(numIn, numOut, 0.0, 0.01),
@@ -267,28 +268,28 @@ private[mllib] class ReLuLayer(
 
   override def layerType: String = "ReLu"
 
-  private def relu(tmp: SM): Unit = {
-    for (i <- 0 until tmp.numRows) {
-      for (j <- 0 until tmp.numCols) {
+  private def relu(tmp: BDM[Double]): Unit = {
+    for (i <- 0 until tmp.rows) {
+      for (j <- 0 until tmp.cols) {
         tmp(i, j) = math.max(0, tmp(i, j))
       }
     }
   }
 
-  override def computeNeuron(temp: SM): Unit = {
+  override def computeNeuron(temp: BDM[Double]): Unit = {
     relu(temp)
   }
 
-  override def computeNeuronPrimitive(temp: SM, output: SM): Unit = {
-    for (i <- 0 until temp.numRows) {
-      for (j <- 0 until temp.numCols)
+  override def computeNeuronPrimitive(temp: BDM[Double], output: BM[Double]): Unit = {
+    for (i <- 0 until temp.rows) {
+      for (j <- 0 until temp.cols)
         if (output(i, j) <= 0) {
           temp(i, j) = 0
         }
     }
   }
 
-  override protected[mllib] def sample(input: SM): SM = {
+  override protected[mllib] def sample(input: BDM[Double]): BDM[Double] = {
     input.map { v =>
       val sd = sigmoid(v, 32)
       val x = v + sd * rand.nextGaussian()
@@ -298,8 +299,8 @@ private[mllib] class ReLuLayer(
 }
 
 private[mllib] class SoftPlusLayer(
-  val weight: SM,
-  val bias: SV) extends Layer with Logging {
+  val weight: BDM[Double],
+  val bias: BDV[Double]) extends Layer with Logging {
   def this(numIn: Int, numOut: Int) {
     this(initUniformDistWeight(numIn, numOut, 0D, 0.01),
       initializeBias(numOut))
@@ -307,23 +308,23 @@ private[mllib] class SoftPlusLayer(
 
   override def layerType: String = "SoftPlus"
 
-  override def computeNeuron(temp: SM): Unit = {
-    for (i <- 0 until temp.numRows) {
-      for (j <- 0 until temp.numCols) {
+  override def computeNeuron(temp: BDM[Double]): Unit = {
+    for (i <- 0 until temp.rows) {
+      for (j <- 0 until temp.cols) {
         temp(i, j) = softplus(temp(i, j))
       }
     }
   }
 
-  override def computeNeuronPrimitive(temp: SM, output: SM): Unit = {
-    for (i <- 0 until temp.numRows) {
-      for (j <- 0 until temp.numCols) {
+  override def computeNeuronPrimitive(temp: BDM[Double], output: BM[Double]): Unit = {
+    for (i <- 0 until temp.rows) {
+      for (j <- 0 until temp.cols) {
         temp(i, j) *= softplusPrimitive(output(i, j))
       }
     }
   }
 
-  override protected[mllib] def sample(input: SM): SM = {
+  override protected[mllib] def sample(input: BDM[Double]): BDM[Double] = {
     input.map { v =>
       val sd = sigmoid(v)
       val x = v + sd * rand.nextGaussian()
@@ -335,8 +336,8 @@ private[mllib] class SoftPlusLayer(
 }
 
 private[mllib] class Identity(
-  val weight: SM,
-  val bias: SV) extends Layer with Logging {
+  val weight: BDM[Double],
+  val bias: BDV[Double]) extends Layer with Logging {
 
   def this(numIn: Int, numOut: Int) {
     this(initUniformDistWeight(numIn, numOut, 0D, 0.01),
@@ -345,18 +346,18 @@ private[mllib] class Identity(
 
   override def layerType: String = "Identity"
 
-  override def computeNeuron(tmp: SM): Unit = {}
+  override def computeNeuron(tmp: BDM[Double]): Unit = {}
 
-  override def computeNeuronPrimitive(temp: SM, output: SM): Unit = {}
+  override def computeNeuronPrimitive(temp: BDM[Double], output: BM[Double]): Unit = {}
 
-  override protected[mllib] def sample(input: SM): SM = {
+  override protected[mllib] def sample(input: BDM[Double]): BDM[Double] = {
     input.map(v => v + rand.nextGaussian())
   }
 }
 
 private[mllib] object Layer {
 
-  def initializeLayer(weight: SM, bias: SV, layerType: String): Layer = {
+  def initializeLayer(weight: BDM[Double], bias: BDV[Double], layerType: String): Layer = {
     layerType match {
       case "SoftPlus" =>
         new SoftPlusLayer(weight, bias)
