@@ -20,13 +20,16 @@ package org.apache.spark.mllib.feature
 import java.util.Random
 
 import breeze.linalg.{DenseVector => BDV, DenseMatrix => BDM, Matrix => BM,
-max => brzMax, Axis => BrzAxis, sum => brzSum}
+max => brzMax, Axis => BrzAxis, sum => brzSum, axpy => brzAxpy}
 
 import org.apache.spark.Logging
 import org.apache.spark.annotation.Experimental
+import org.apache.spark.broadcast.Broadcast
 import org.apache.spark.mllib.linalg.{DenseMatrix => SDM, SparseMatrix => SSM, Matrix => SM,
 SparseVector => SSV, DenseVector => SDV, Vector => SV, Vectors, Matrices, BLAS}
 import org.apache.spark.mllib.neuralNetwork.{NNUtil, MLP}
+import org.apache.spark.mllib.rdd.RDDFunctions._
+import org.apache.spark.rdd.RDD
 import org.apache.spark.util.Utils
 import org.apache.spark.util.random.XORShiftRandom
 
@@ -34,58 +37,64 @@ import org.apache.spark.util.random.XORShiftRandom
 class Sentence2vec(
   val sentenceLayer: Array[BaseLayer],
   val mlp: MLP,
-  val word2Vec: BDV[Double],
   val vectorSize: Int,
   val windowSize: Int) extends Serializable with Logging {
 
+  @transient var word2Vec: BDV[Double] = null
   @transient private lazy val numSentenceLayer = sentenceLayer.length
   @transient private lazy val numLayer = numSentenceLayer + mlp.numLayer
-  @transient private lazy val inputLayer = sentenceLayer.head.asInstanceOf[SentenceLayer]
   @transient private lazy val rand: Random = new XORShiftRandom()
   @transient private lazy val wordSize: Int = word2Vec.length / vectorSize
-  require(sentenceLayer.last.outChannels == 1)
+
+  def setWord2Vec(word2Vec: BDV[Double]): Unit = {
+    this.word2Vec = word2Vec
+  }
 
   def predict(sentence: Array[Int]): BDV[Double] = {
-    var input = toInput(sentence)
+    var input = sentenceToInput(sentence)
     for (i <- 0 until sentenceLayer.length) {
       input = sentenceLayer(i).forward(input)
     }
-    val out = mlp.predict(input)
-    out(::, 0)
+    input.toDenseVector
   }
 
   protected def computeGradient(
-    sentence: Array[Int]): (Array[(BDM[Double],
-    BDV[Double])], Double) = {
-    val input = toInput(sentence)
-    val grads = new Array[(BDM[Double], BDV[Double])](numLayer)
-    val (out, delta, cost) = computeDelta(sentence, input)
-    for (i <- 0 until numSentenceLayer) {
-      grads(i) = sentenceLayer(i).backward(if (i == 0) input else out(i - 1), delta(i))
-    }
+    sentence: Array[Int]): (Array[(BDM[Double], BDV[Double])], Double) = {
+    val in = sentenceToInput(sentence)
+    val sentOutput = sentenceComputeOutputs(sentence, in)
+    val (prevDelta, mlpGrad, cost) = mlpComputeGradient(sentence, in,
+      sentOutput.last.toDenseVector)
+    val sentGrad = sentenceComputeGradient(sentence, in, prevDelta, sentOutput)
 
-    for (i <- 0 until mlp.numLayer) {
-      val input = out(numSentenceLayer + i - 1)
-      val m = mlp.innerLayers(i).backward(input, delta(i))
-      grads(numSentenceLayer + i) = (m._1, m._2)
-    }
-    (grads, cost)
+    //    if (sentOutput.filter(t => t != null && t.valuesIterator.sum.isNaN).length > 0 ||
+    //      mlpGrad.filter(t => t != null && t._1.valuesIterator.sum.isNaN).length > 0 ||
+    //      sentGrad.filter(t => t != null && t._1.valuesIterator.sum.isNaN).length > 0) {
+    //      sentOutput.foreach { s =>
+    //        println(s"witgo_witgo sentOutput: " + s.valuesIterator.sum / s.size)
+    //      }
+    //      println(s"witgo_witgo prevDelta: " + prevDelta.sum / prevDelta.length)
+    //      mlpGrad.foreach { case (g, index) =>
+    //        println(s"witgo_witgo mlpGrad: " + g.valuesIterator.sum / g.size)
+    //      }
+    //      sentGrad.filter(t => t != null).foreach { case (g, index) =>
+    //        println(s"witgo_witgo sentGrad: " + g.valuesIterator.sum / g.size)
+    //      }
+    //    }
+    (sentGrad ++ mlpGrad, cost)
   }
 
-  protected[mllib] def computeDelta(
+  protected[mllib] def mlpComputeGradient(
     sentence: Array[Int],
-    input: BDM[Double]): (Array[BDM[Double]], Array[BDM[Double]], Double) = {
-    val output = new Array[BDM[Double]](numLayer)
-    val delta = new Array[BDM[Double]](numLayer)
-    for (i <- 0 until numSentenceLayer) {
-      output(i) = sentenceLayer(i).forward(if (i == 0) input else output(i - 1))
-    }
-
-    val sentenceOut = output(numSentenceLayer - 1)
+    sentVec: BDM[Double],
+    sentOut: BDV[Double]) = {
     val sentenceSize = sentence.size
-    val x = BDM.zeros[Double](vectorSize, sentenceSize)
-    val label = BDM.zeros[Double](wordSize, sentenceSize)
-    for (pos <- 0 until sentenceSize) {
+    val randomize = Utils.randomize(0 until sentenceSize).slice(0, 40)
+    val randomizeSize = randomize.size
+    val mlpIn = BDM.zeros[Double](vectorSize, randomizeSize)
+    val label = BDM.zeros[Double](wordSize, randomizeSize)
+    label := 0.1 / wordSize
+    for (i <- 0 until randomizeSize) {
+      val pos = randomize(i)
       val word = sentence(pos)
       val b = rand.nextInt(windowSize)
       var s = 0.0
@@ -96,54 +105,177 @@ class Sentence2vec(
           val c = pos - windowSize + a
           if (c >= 0 && c < sentenceSize) {
             val lastWord = sentence(c)
-            sum :+= toVector(lastWord)
+            sum :+= wordToVector(lastWord)
             s += 1
           }
         }
         a += 1
       }
       sum :/= s
-      sum :*= sentenceOut(::, 0)
-      x(::, pos) := sum
-      label(word, pos) = 1.0
+      sum :+= sentOut
+      mlpIn(::, i) := sum
+      label(word, i) += 0.9
     }
+    val (mlpOuts, mlpDeltas) = mlp.computeDelta(mlpIn, label)
+    val mlpGrads = mlp.computeGradientGivenDelta(mlpIn, mlpOuts, mlpDeltas)
+    val cost = NNUtil.crossEntropy(mlpOuts.last, label) / randomizeSize
+    val prevDelta: BDM[Double] = mlp.innerLayers.head.weight.t * mlpDeltas.head
+    val inputDelta = brzSum(prevDelta, BrzAxis._1)
+    inputDelta :/= randomizeSize.toDouble
 
-    val m = mlp.computeDelta(sentenceOut, label)
-    for (i <- 0 until mlp.numLayer) {
-      output(numSentenceLayer + i) = m._1(i)
-      delta(numSentenceLayer + i) = m._2(i)
+    (inputDelta, mlpGrads, cost)
+  }
+
+  protected[mllib] def sentenceComputeOutputs(sentence: Array[Int],
+    x: BDM[Double]): Array[BDM[Double]] = {
+    val output = new Array[BDM[Double]](numSentenceLayer)
+    for (i <- 0 until numSentenceLayer) {
+      output(i) = sentenceLayer(i).forward(if (i == 0) x else output(i - 1))
     }
-    val cost = NNUtil.crossEntropy(output.last, label)
+    output
+  }
 
-    var prevDelta: BDM[Double] = mlp.innerLayers.head.weight.t * delta(numSentenceLayer)
-    for (pos <- 0 until sentenceSize) {
-      val df = x(::, pos) :/ sentenceOut(::, 0)
-      prevDelta(::, pos) :*= df
-    }
-    prevDelta = brzSum(prevDelta, BrzAxis._1).asDenseMatrix.t.toDenseMatrix
-
+  protected[mllib] def sentenceComputeGradient(
+    sentence: Array[Int],
+    x: BDM[Double],
+    mlpDelta: BDV[Double],
+    output: Array[BDM[Double]]): Array[(BDM[Double], BDV[Double])] = {
+    val delta = new Array[BDM[Double]](numSentenceLayer)
+    val prevDelta = new BDM[Double](output.last.rows, output.last.cols, mlpDelta.toArray)
     for (i <- (0 until numSentenceLayer).reverse) {
       val out = output(i)
       val currentLayer = sentenceLayer(i)
       delta(i) = if (i == numSentenceLayer - 1) {
         prevDelta
-      }
-      else {
+      } else {
         val nextLayer = sentenceLayer(i + 1)
         val nextDelta = delta(i + 1)
         nextLayer.previousError(out, currentLayer, nextDelta)
       }
     }
-    (output, delta, cost)
+
+    val grads = new Array[(BDM[Double], BDV[Double])](numSentenceLayer)
+    for (i <- 0 until numSentenceLayer) {
+      grads(i) = sentenceLayer(i).backward(if (i == 0) x else output(i - 1), delta(i))
+    }
+    grads
   }
 
-  private def toVector(pos: Int): BDV[Double] = {
+  private def wordToVector(pos: Int): BDV[Double] = {
     word2Vec(pos * vectorSize until (pos + 1) * vectorSize)
   }
 
-  private def toInput(sentence: Array[Int]): BDM[Double] = {
+  private def sentenceToInput(sentence: Array[Int]): BDM[Double] = {
     val vectors = sentence
       .map(s => word2Vec(s * vectorSize until (s + 1) * vectorSize))
     BDV.vertcat(vectors.toArray: _*).asDenseMatrix.t
+  }
+}
+
+object Sentence2vec {
+  def train[S <: Iterable[String]](
+    dataset: RDD[S],
+    word2VecModel: Word2VecModel,
+    numIter: Int,
+    learningRate: Double): Sentence2vec = {
+
+    val wordVectors = word2VecModel.getVectors
+    val vectorSize = wordVectors.head._2.size
+    val word2Index = wordVectors.keys.zipWithIndex.toMap
+    val sentences = dataset.map(_.filter(w => word2Index.contains(w))).filter(_.size > 4).
+      map(w => w.map(t => word2Index(t)).toArray)
+    val word2Vec = BDV.zeros[Double](vectorSize * wordVectors.size)
+    wordVectors.foreach { case (word, f) =>
+      val offset = word2Index(word) * vectorSize
+      for (i <- 0 until f.length) {
+        word2Vec(offset + i) = f(i).toDouble
+      }
+    }
+    val sentenceLayer: Array[BaseLayer] = new Array[BaseLayer](3)
+    sentenceLayer(0) = new ReLuSentenceInputLayer(1, 10, 2, vectorSize)
+    sentenceLayer(1) = new ReLuSentenceLayer(10, vectorSize / 4, 1)
+    sentenceLayer(2) = new DynamicAverageSentencePooling(4)
+    val mlp = new MLP(Array(vectorSize, 64, word2Index.size), 0.2, 0.5)
+    val sent2vec = new Sentence2vec(sentenceLayer, mlp, vectorSize, 2)
+    val wordBroadcast = dataset.context.broadcast(word2Vec)
+    val momentumSum = new Array[(BDM[Double], BDV[Double])](sent2vec.numLayer)
+    for (iter <- 0 until numIter) {
+      val sentBroadcast = dataset.context.broadcast(sent2vec)
+      val (gradientSum, lossSum, miniBatchSize) = trainOnce(sentences,
+        sentBroadcast, wordBroadcast, iter)
+      if (miniBatchSize > 0) {
+        gradientSum.filter(t => t != null).foreach(m => {
+          // println("m " + m._1.valuesIterator.sum / m._1.size)
+          m._1 :/= miniBatchSize.toDouble
+          m._2 :/= miniBatchSize.toDouble
+        })
+        println(s"loss: " + (lossSum / miniBatchSize))
+        updateParameters(momentumSum, gradientSum, sent2vec, iter, learningRate)
+      }
+      sentBroadcast.destroy()
+    }
+    sent2vec
+  }
+
+  def updateParameters(
+    momentumSum: Array[(BDM[Double], BDV[Double])],
+    gradSum: Array[(BDM[Double], BDV[Double])],
+    sent2Vec: Sentence2vec,
+    iter: Int,
+    learningRate: Double = 0.01): Unit = {
+    val momentum = if (iter > 10) 0.9 else 0.5
+    val numSentenceLayer = sent2Vec.numSentenceLayer
+    mergerParameters(momentumSum, gradSum, momentum)
+    for (i <- 0 until numSentenceLayer) {
+      if (momentumSum(i) != null) {
+        val layer = sent2Vec.sentenceLayer(i).asInstanceOf[PartialConnectedLayer]
+        brzAxpy(-learningRate, momentumSum(i)._1, layer.weight)
+        brzAxpy(-learningRate, momentumSum(i)._2, layer.bias)
+      }
+    }
+
+    for (i <- 0 until sent2Vec.mlp.numLayer) {
+      val layer = sent2Vec.mlp.innerLayers(i)
+      brzAxpy(-learningRate, momentumSum(numSentenceLayer + i)._1, layer.weight)
+      brzAxpy(-learningRate, momentumSum(numSentenceLayer + i)._2, layer.bias)
+    }
+  }
+
+  def mergerParameters(
+    a: Array[(BDM[Double], BDV[Double])],
+    b: Array[(BDM[Double], BDV[Double])],
+    momentum: Double = 1.0): Unit = {
+    for (i <- 0 until a.length) {
+      if (a(i) == null) {
+        a(i) = b(i)
+      } else if (b(i) != null) {
+        if (momentum < 1.0) {
+          a(i)._1 :*= momentum
+          a(i)._2 :*= momentum
+        }
+        a(i)._1 :+= b(i)._1
+        a(i)._2 :+= b(i)._2
+      }
+    }
+  }
+
+  def trainOnce(
+    dataset: RDD[Array[Int]],
+    sent2Vec: Broadcast[Sentence2vec],
+    word2Vec: Broadcast[BDV[Double]],
+    iter: Int): (Array[(BDM[Double],
+    BDV[Double])], Double, Long) = {
+    dataset.context.broadcast()
+    val numLayer = sent2Vec.value.numLayer
+    dataset.sample(false, 0.001).treeAggregate((new Array[(BDM[Double],
+      BDV[Double])](numLayer), 0D, 0L))(seqOp = (c, v) => {
+      sent2Vec.value.setWord2Vec(word2Vec.value)
+      val g = sent2Vec.value.computeGradient(v)
+      mergerParameters(c._1, g._1)
+      (c._1, c._2 + g._2, c._3 + 1)
+    }, combOp = (c1, c2) => {
+      mergerParameters(c1._1, c2._1)
+      (c1._1, c1._2 + c2._2, c1._3 + c2._3)
+    })
   }
 }
