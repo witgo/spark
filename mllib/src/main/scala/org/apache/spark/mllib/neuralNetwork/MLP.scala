@@ -113,13 +113,10 @@ class MLP(
   }
 
   protected[mllib] def computeGradient(
-    x: BDM[Double], label: BDM[Double]): (Array[(BDM[Double], BDV[Double])], Double, Double) = {
-    val grads = new Array[(BDM[Double], BDV[Double])](numLayer)
+    x: BDM[Double],
+    label: BDM[Double]): (Array[(BDM[Double], BDV[Double])], Double, Double) = {
     val (out, delta) = computeDelta(x, label)
-    for (i <- 0 until numLayer) {
-      val input = if (i == 0) x else out(i - 1)
-      grads(i) = innerLayers(i).backward(input, delta(i))
-    }
+    val grads = computeGradientGivenDelta(x, out, delta)
 
     val cost = if (innerLayers.last.layerType == "SoftMax") {
       NNUtil.crossEntropy(out.last, label)
@@ -127,6 +124,18 @@ class MLP(
       NNUtil.meanSquaredError(out.last, label)
     }
     (grads, cost, x.cols.toDouble)
+  }
+
+  protected[mllib] def computeGradientGivenDelta(
+    x: BDM[Double],
+    out: Array[BDM[Double]],
+    delta: Array[BDM[Double]]): Array[(BDM[Double], BDV[Double])] = {
+    val grads = new Array[(BDM[Double], BDV[Double])](numLayer)
+    for (i <- 0 until numLayer) {
+      val input = if (i == 0) x else out(i - 1)
+      grads(i) = innerLayers(i).backward(input, delta(i))
+    }
+    grads
   }
 
   protected[mllib] def dropOutMask(cols: Int): Array[BDM[Double]] = {
