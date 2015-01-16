@@ -21,26 +21,42 @@ import org.scalatest.FunSuite
 
 import org.apache.spark.mllib.util.MLlibTestSparkContext
 
+import org.apache.spark.SparkContext._
+import breeze.linalg.{norm => brzNorm}
+
 class Sentence2vecSuite extends FunSuite with MLlibTestSparkContext {
 
   test("Sentence2vec") {
     import org.apache.spark.mllib.feature._
-    val txt = sc.textFile("/Users/witgo/work/code/java/spark/data/mllib/trainings.txt").
+    val txt = sc.textFile("/Users/witgo/work/code/java/spark/data/mllib/data.txt").
       map(_.split(" ").
-      filter(w => w.length > 2).
+      filter(w => w.length > 1).
       filter(w => !w.contains("_")).
       filter(w => !w.contains("-"))).
-      filter(_.length > 4).
-      map(_.toIterable)
+      filter(_.length > 4).sample(false, 0.5).
+      map(_.toIterable).cache()
+    println("txt " + txt.count)
     val word2Vec = new Word2Vec()
     word2Vec.
-      setVectorSize(10).
-      setSeed(42L).
-      setNumIterations(5).
-      setNumPartitions(2)
+      setVectorSize(100).
+      setSeed(12324L)
     val model = word2Vec.fit(txt)
-
-    Sentence2vec.train(txt, model, 10000, 0.1)
-
+    val (sent2vec, word2, word2Index) = Sentence2vec.train(txt, model, 500, 0.05, 0.0005)
+    val vecs = txt.map { t =>
+      val vec = t.filter(w => word2Index.contains(w)).map(w => word2Index(w)).toArray
+      (t, vec)
+    }.filter(_._2.length > 4).map { sent =>
+      sent2vec.setWord2Vec(word2)
+      val vec = sent2vec.predict(sent._2)
+      vec :/= brzNorm(vec, 2.0)
+      (sent._1, vec)
+    }.cache()
+    vecs.takeSample(false, 10).foreach { case (text, vec) =>
+      println(s"${text.mkString(" ")}")
+      vecs.map(v => {
+        val sim: Double = v._2.dot(vec)
+        (sim, v._1)
+      }).sortByKey(false).take(4).foreach(t => println(s"${t._1} =>${t._2.mkString(" ")} \n"))
+    }
   }
 }
