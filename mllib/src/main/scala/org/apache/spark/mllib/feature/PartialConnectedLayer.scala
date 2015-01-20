@@ -68,32 +68,31 @@ private[mllib] trait BaseLayer extends Serializable {
 }
 
 
-private[mllib] trait SentencePoolingLayer extends BaseLayer {
-  def scaleSize: Int
-
-  override def computeNeuron(sum: Double): Double = sum
-
-  override def computeNeuronPrimitive(out: Double): Double = 1
-}
-
-
-class FixedMaxSentencePooling(scaleSize: Int)
-  extends MaxSentencePooling(scaleSize) {
+private[mllib] class FixedMaxSentencePooling(
+  minK_ : Int)
+  extends MaxSentencePooling(minK_, 1.0) {
   override def layerType: String = "FixedMaxSentencePooling"
 
   override def forward(input: BDM[Double]): BDM[Double] = {
-    val out = BDM.zeros[Double](scaleSize, input.cols)
+    assert(input.rows >= minK)
+    val out = BDM.zeros[Double](minK, input.cols)
     maxMatrix(input, out)
     out
   }
 }
 
 private[mllib] class MaxSentencePooling(
-  val scaleSize: Int) extends SentencePoolingLayer {
+  val minK: Int,
+  val scale: Double) extends BaseLayer {
   override def layerType: String = "MaxSentencePooling"
 
+  override def computeNeuron(sum: Double): Double = sum
+
+  override def computeNeuronPrimitive(out: Double): Double = 1
+
   override def forward(input: BDM[Double]): BDM[Double] = {
-    val sRows = input.rows / scaleSize
+    assert(input.rows >= minK)
+    val sRows = math.max(minK, (input.rows * scale).floor.toInt)
     val out = BDM.zeros[Double](sRows, input.cols)
     maxMatrix(input, out)
     out
@@ -108,7 +107,7 @@ private[mllib] class MaxSentencePooling(
     previousLayer: BaseLayer,
     currentDelta: BDM[Double]): BDM[Double] = {
     val preDelta = input.copy
-    expandMatrix(currentDelta, preDelta)
+    expandMatrix(preDelta, currentDelta)
     previousLayer.computeNeuronPrimitive(preDelta, input)
     preDelta
   }
@@ -136,6 +135,7 @@ private[mllib] class MaxSentencePooling(
             maxIndex = mi
           }
         }
+        assert(maxIndex > -1)
         for (mi <- mRowsStart until mRowsEnd) {
           if (mi == maxIndex) {
             input(mi, j) = currentDelta(i, j)
@@ -173,15 +173,32 @@ private[mllib] class MaxSentencePooling(
   }
 }
 
-private[mllib] class AverageSentencePooling(
-  val scaleSize: Int) extends SentencePoolingLayer {
-  override def layerType: String = "AverageSentencePooling"
+private[mllib] class DynamicKMaxSentencePooling(
+  val minK: Int,
+  val scale: Double) extends BaseLayer {
+  override def layerType: String = "DynamicKMaxSentencePooling"
+
+  override def computeNeuron(sum: Double): Double = sum
+
+  override def computeNeuronPrimitive(out: Double): Double = 1
 
   override def forward(input: BDM[Double]): BDM[Double] = {
-    val sRows = input.rows / scaleSize
-    val out = BDM.zeros[Double](sRows, input.cols)
-    averageMatrix(input, out)
+    val K = math.max(minK, (input.rows * scale).ceil.toInt)
+    assert(input.rows >= K)
+    val out = BDM.zeros[Double](K, input.cols)
+    maxMatrix(input, out)
     out
+  }
+
+  protected def maxMatrix(input: BDM[Double], out: BDM[Double]): Unit = {
+    val K = out.rows
+    for (i <- 0 until input.cols) {
+      val row = input(::, i)
+      val pair = row.iterator.toArray.sortBy(t => -t._2).slice(0, K).sortBy(t => t._1)
+      for (j <- 0 until K) {
+        out(j, i) = pair(j)._2
+      }
+    }
   }
 
   override def backward(
@@ -192,58 +209,77 @@ private[mllib] class AverageSentencePooling(
     input: BDM[Double],
     previousLayer: BaseLayer,
     currentDelta: BDM[Double]): BDM[Double] = {
-    val preDelta = BDM.zeros[Double](input.rows, input.cols)
-    expandMatrix(currentDelta, preDelta)
+    val preDelta = input.copy
+    expandMatrix(preDelta, currentDelta)
     previousLayer.computeNeuronPrimitive(preDelta, input)
     preDelta
   }
 
-  protected def expandMatrix(matrix: BM[Double], out: BM[Double]): Unit = {
-    val mRows = matrix.rows
-    val oRows = out.rows
-    val cols = out.cols
-    val scaleSize = oRows / mRows
-    val remainder = oRows % mRows
-    for (i <- 0 until oRows) {
-      for (j <- 0 until cols) {
-        val offsetRows = math.min(i / scaleSize, mRows - 1)
-        val m = if (offsetRows == mRows) scaleSize + remainder else scaleSize
-        out(i, j) = matrix(offsetRows, j) / m
-      }
-    }
-  }
-
-  protected def averageMatrix(matrix: BM[Double], out: BM[Double]): Unit = {
-    val mRows = matrix.rows
-    val oRows = out.rows
-    val cols = out.cols
-    val scaleSize = mRows / oRows
-    for (i <- 0 until oRows) {
-      for (j <- 0 until cols) {
-        val mRowsStart = i * scaleSize
-        val mRowsEnd = if (i == oRows - 1) {
-          math.max(mRowsStart + scaleSize, mRows)
-        } else {
-          mRowsStart + scaleSize
-        }
-        var sum = 0.0
-        for (mi <- mRowsStart until mRowsEnd) {
-          sum += matrix(mi, j)
-        }
-        out(i, j) = sum / (mRowsEnd - mRowsStart)
+  protected def expandMatrix(input: BDM[Double], currentDelta: BDM[Double]): Unit = {
+    val K = currentDelta.rows
+    assert(input.rows >= K)
+    for (i <- 0 until input.cols) {
+      val row = input(::, i)
+      val pair = row.iterator.toArray.sortBy(t => -t._2).slice(0, K).sortBy(t => t._1)
+      row := 0.0
+      for (j <- 0 until K) {
+        row(pair(j)._1) = currentDelta(j, i)
       }
     }
   }
 }
 
-class FixedAverageSentencePooling(scaleSize: Int)
-  extends AverageSentencePooling(scaleSize) {
-  override def layerType: String = "DynamicAverageSentencePooling"
+private[mllib] class KMaxSentencePooling(K: Int)
+  extends BaseLayer {
+  override def layerType: String = "KMaxSentencePooling"
+
+  override def computeNeuron(sum: Double): Double = sum
+
+  override def computeNeuronPrimitive(out: Double): Double = 1
 
   override def forward(input: BDM[Double]): BDM[Double] = {
-    val out = BDM.zeros[Double](scaleSize, input.cols)
-    averageMatrix(input, out)
+    val out = BDM.zeros[Double](K, input.cols)
+    maxMatrix(input, out)
     out
+  }
+
+  protected def maxMatrix(input: BDM[Double], out: BDM[Double]): Unit = {
+    assert(out.rows == K)
+    assert(input.rows >= K)
+    for (i <- 0 until input.cols) {
+      val row = input(::, i)
+      val pair = row.iterator.toArray.sortBy(t => -t._2).slice(0, K).sortBy(t => t._1)
+      for (j <- 0 until K) {
+        out(j, i) = pair(j)._2
+      }
+    }
+  }
+
+  override def backward(
+    input: BDM[Double],
+    delta: BDM[Double]): (BDM[Double], BDV[Double]) = null
+
+  override def previousError(
+    input: BDM[Double],
+    previousLayer: BaseLayer,
+    currentDelta: BDM[Double]): BDM[Double] = {
+    val preDelta = input.copy
+    expandMatrix(preDelta, currentDelta)
+    previousLayer.computeNeuronPrimitive(preDelta, input)
+    preDelta
+  }
+
+  protected def expandMatrix(input: BDM[Double], currentDelta: BDM[Double]): Unit = {
+    assert(currentDelta.rows == K)
+    assert(input.rows >= K)
+    for (i <- 0 until input.cols) {
+      val row = input(::, i)
+      val pair = row.iterator.toArray.sortBy(t => -t._2).slice(0, K).sortBy(t => t._1)
+      row := 0.0
+      for (j <- 0 until K) {
+        row(pair(j)._1) = currentDelta(j, i)
+      }
+    }
   }
 }
 
@@ -253,15 +289,16 @@ private[mllib] trait PartialConnectedLayer extends BaseLayer {
 
   def bias: BDV[Double]
 
-  def connTable: BDM[Double]
+  val connTable: BDM[Double]
 }
 
-private[mllib] trait SentenceLayer extends PartialConnectedLayer {
+
+private[mllib] trait NarrowSentenceLayer extends PartialConnectedLayer {
   def inChannels: Int
 
   def outChannels: Int
 
-  def connTable: BDM[Double] = BDM.ones[Double](inChannels, outChannels)
+  val connTable: BDM[Double] = BDM.ones[Double](inChannels, outChannels)
 
   def kernelSize: Int
 
@@ -269,25 +306,24 @@ private[mllib] trait SentenceLayer extends PartialConnectedLayer {
     require(input.cols == inChannels)
     val outDim = getOutDim(input)
     val out = BDM.zeros[Double](outDim, outChannels)
-
     for (i <- 0 until inChannels) {
       val in = input(::, i)
       for (offset <- 0 until outDim) {
         val a = in(getInSlice(offset))
         for (j <- 0 until outChannels) {
           if (connTable(i, j) > 0.0) {
-            val s: Double = getNeuron(weight, i, j).dot(a)
+            val kernel = getNeuron(weight, i, j)
+            val s: Double = kernel.dot(a)
             out(offset, j) += s
           }
         }
       }
     }
 
-    for (i <- 0 until outDim) {
-      for (j <- 0 until outChannels) {
-        out(i, j) += bias(j)
-      }
+    for (j <- 0 until outChannels) {
+      out(::, j) :+= bias(j)
     }
+
     computeNeuron(out)
     out
   }
@@ -302,13 +338,12 @@ private[mllib] trait SentenceLayer extends PartialConnectedLayer {
     for (i <- 0 until inChannels) {
       val in = input(::, i)
       for (offset <- 0 until outDim) {
-        val inA = in(getInSlice(offset))
+        val a = in(getInSlice(offset))
         for (j <- 0 until outChannels) {
           if (connTable(i, j) > 0.0) {
             val z = delta(offset, j)
-            val c = inA * z
-            val k = getNeuron(gradWeight, i, j)
-            k :+= c
+            val kernel = getNeuron(gradWeight, i, j)
+            kernel :+= (a * z)
           }
         }
       }
@@ -316,23 +351,21 @@ private[mllib] trait SentenceLayer extends PartialConnectedLayer {
     (gradWeight, gradBias)
   }
 
-
   def previousError(
     input: BDM[Double],
     prevLayer: BaseLayer,
-    currentDelta: BDM[Double]): BDM[Double] = {
+    delta: BDM[Double]): BDM[Double] = {
     require(input.cols == inChannels)
     val outDim = getOutDim(input)
     val preDelta = BDM.zeros[Double](input.rows, inChannels)
     for (i <- 0 until inChannels) {
-      val pv = preDelta(::, i)
+      val pa = preDelta(::, i)
       for (offset <- 0 until outDim) {
         for (j <- 0 until outChannels) {
           if (connTable(i, j) > 0.0) {
-            val o = currentDelta(offset, j)
-            val k = getNeuron(weight, i, j)
-            val d = k * o
-            pv(getInSlice(offset)) :+= d
+            val o = delta(offset, j)
+            val kernel = getNeuron(weight, i, j)
+            pa(getInSlice(offset)) :+= (kernel * o)
           }
         }
       }
@@ -346,19 +379,9 @@ private[mllib] trait SentenceLayer extends PartialConnectedLayer {
     offset until offset + kernelSize
   }
 
-  @inline private def getInDim(input: BDM[Double]): Int = {
-    input.rows
-  }
-
   @inline private def getOutDim(input: BDM[Double]): Int = {
-    getInDim(input) - kernelSize + 1
-  }
-
-  @inline private def getNeuron(
-    weight: BDM[Double],
-    inOffset: Int): BDM[Double] = {
-    val colOffset = outChannels * inOffset
-    weight(::, colOffset until (colOffset + outChannels))
+    // Narrow convolution
+    input.rows - kernelSize + 1
   }
 
   @inline private def getNeuron(
@@ -370,6 +393,119 @@ private[mllib] trait SentenceLayer extends PartialConnectedLayer {
   }
 }
 
+private[mllib] trait SentenceLayer extends PartialConnectedLayer {
+  def inChannels: Int
+
+  def outChannels: Int
+
+  lazy val connTable: BDM[Double] = BDM.ones[Double](inChannels, outChannels)
+
+  def kernelSize: Int
+
+  def forward(input: BDM[Double]): BDM[Double] = {
+    require(input.cols == inChannels)
+    val outDim = getOutDim(input)
+    val out = BDM.zeros[Double](outDim, outChannels)
+    val in = BDV.zeros[Double](kernelSize)
+    for (offset <- 0 until outDim) {
+      for (i <- 0 until inChannels) {
+        setIn(offset, i, input, in)
+        for (j <- 0 until outChannels) {
+          if (connTable(i, j) > 0.0) {
+            val kernel = getNeuron(weight, i, j)
+            val d = in.dot(kernel)
+            out(offset, j) += d
+          }
+        }
+      }
+    }
+    for (j <- 0 until outChannels) {
+      out(::, j) += bias(j)
+    }
+    computeNeuron(out)
+    out
+  }
+
+  def backward(input: BDM[Double], delta: BDM[Double]): (BDM[Double], BDV[Double]) = {
+    require(input.cols == inChannels)
+    val outDim = getOutDim(input)
+    val gradWeight = BDM.zeros[Double](weight.rows, weight.cols)
+    val gradBias = brzSum(delta, brzAxis._0).toDenseVector
+    val in = BDV.zeros[Double](kernelSize)
+    require(gradBias.length == outChannels)
+    for (offset <- 0 until outDim) {
+      for (i <- 0 until inChannels) {
+        setIn(offset, i, input, in)
+        for (j <- 0 until outChannels) {
+          if (connTable(i, j) > 0.0) {
+            val z = delta(offset, j)
+            val kernel = getNeuron(gradWeight, i, j)
+            kernel :+= (in * z)
+          }
+        }
+      }
+    }
+    (gradWeight, gradBias)
+  }
+
+  def previousError(
+    input: BDM[Double],
+    prevLayer: BaseLayer,
+    currentDelta: BDM[Double]): BDM[Double] = {
+    require(input.cols == inChannels)
+    val outDim = getOutDim(input)
+    val preDelta = BDM.zeros[Double](input.rows, inChannels)
+    for (offset <- 0 until outDim) {
+      for (i <- 0 until inChannels) {
+        for (j <- 0 until outChannels) {
+          if (connTable(i, j) > 0.0) {
+            val d = currentDelta(offset, j)
+            val kernel = getNeuron(weight, i, j)
+            val err: BDV[Double] = kernel * d
+            for (i <- 0 until kernelSize) {
+              val s = offset + i - (kernelSize - 1)
+              if (s >= 0 && s < input.rows) {
+                preDelta(s, i) += err(i)
+              }
+            }
+          }
+        }
+      }
+    }
+
+    prevLayer.computeNeuronPrimitive(preDelta, input)
+    preDelta
+  }
+
+  @inline private def getOutDim(input: BDM[Double]): Int = {
+    // Wide convolution
+    input.rows + kernelSize - 1
+  }
+
+  @inline private def setIn(
+    offset: Int,
+    channel: Int,
+    input: BDM[Double],
+    in: BDV[Double]): Unit = {
+    for (i <- 0 until kernelSize) {
+      val s = offset + i - (kernelSize - 1)
+      in(i) = if (s >= 0 && s < input.rows) {
+        input(s, channel)
+      }
+      else {
+        0.0
+      }
+    }
+  }
+
+  @inline private def getNeuron(
+    weight: BDM[Double],
+    inOffset: Int,
+    outOffset: Int): BDV[Double] = {
+    val colOffset = outChannels * inOffset + outOffset
+    weight(::, colOffset)
+  }
+}
 
 private[mllib] class ReLuSentenceLayer(
   val weight: BDM[Double],
@@ -398,7 +534,6 @@ private[mllib] class ReLuSentenceLayer(
     if (out > 0) 1.0 else 0.0
   }
 }
-
 
 private[mllib] class SigmoidSentenceLayer(
   val weight: BDM[Double],
@@ -429,7 +564,6 @@ private[mllib] class SigmoidSentenceLayer(
   }
 }
 
-
 private[mllib] class TanhSentenceLayer(
   val weight: BDM[Double],
   val bias: BDV[Double],
@@ -442,8 +576,8 @@ private[mllib] class TanhSentenceLayer(
     outChannels: Int,
     kernelSize: Int) {
     this(initUniformWeight(inChannels, outChannels, kernelSize,
-      1, -math.sqrt(6D / (kernelSize + inChannels * outChannels)),
-      math.sqrt(6D / (kernelSize + inChannels * outChannels))),
+      1, -math.sqrt(6D / (kernelSize * inChannels + outChannels)),
+      math.sqrt(6D / (kernelSize * inChannels + outChannels))),
       initializeBias(outChannels),
       inChannels, outChannels, kernelSize)
   }
@@ -475,12 +609,16 @@ private[mllib] trait SentenceInputLayer extends SentenceLayer {
     val outDim = getOutDim(input)
     assert(outDim > 1)
     val out = BDM.zeros[Double](outDim, outChannels)
+    val in = BDV.zeros[Double](windowSize * vectorSize)
     for (offset <- 0 until outDim) {
-      val a = input(getInSlice(offset), ::)
-      val kernel = getNeuron(weight, 0)
-      var o: BDM[Double] = a.t * kernel
-      assert(o.rows == 1)
-      out(offset until offset + 1, ::) :+= o
+      for (i <- 0 until input.cols) {
+        setIn(offset, i, input, in)
+        for (j <- 0 until outChannels) {
+          val kernel = getNeuron(weight, i, j)
+          val d = in.dot(kernel)
+          out(offset, j) += d
+        }
+      }
     }
     for (j <- 0 until outChannels) {
       out(::, j) += bias(j)
@@ -493,50 +631,70 @@ private[mllib] trait SentenceInputLayer extends SentenceLayer {
     val outDim = getOutDim(input)
     val gradWeight = BDM.zeros[Double](weight.rows, weight.cols)
     val gradBias = brzSum(delta, brzAxis._0).toDenseVector
+    val in = BDV.zeros[Double](windowSize * vectorSize)
     require(gradBias.length == outChannels)
     for (offset <- 0 until outDim) {
-      val a = input(getInSlice(offset), ::)
-      val z = delta(offset until offset + 1, ::)
-      val c = a * z
-      val k = getNeuron(gradWeight, 0)
-      k :+= c
+      for (i <- 0 until input.cols) {
+        setIn(offset, i, input, in)
+        for (j <- 0 until outChannels) {
+          val kernel = getNeuron(gradWeight, i, j)
+          val d = delta(offset, j)
+          kernel :+= (in :* d)
+        }
+      }
     }
     (gradWeight, gradBias)
   }
 
-
   override def previousError(
     input: BDM[Double],
     prevLayer: BaseLayer,
-    currentDelta: BDM[Double]): BDM[Double] = {
+    delta: BDM[Double]): BDM[Double] = {
+    require(input.cols == inChannels)
     val outDim = getOutDim(input)
     val preDelta = BDM.zeros[Double](input.rows, inChannels)
-    for (i <- 0 until inChannels) {
-      val pv = preDelta(::, i)
-      for (offset <- 0 until outDim) {
+    for (offset <- 0 until outDim) {
+      for (i <- 0 until inChannels) {
         for (j <- 0 until outChannels) {
-          val o = currentDelta(offset, j)
-          val k = getNeuron(weight, i, j)
-          val d = k * o
-          pv(getInSlice(offset)) :+= d
+          val d = delta(offset, j)
+          val kernel = getNeuron(weight, i, j)
+          val err: BDV[Double] = kernel * d
+          for (i <- 0 until windowSize) {
+            val s = offset + i - (windowSize - 1)
+            if (s >= 0 && s < input.rows / vectorSize) {
+              preDelta(s * vectorSize until (s + 1) * vectorSize, i) :+=
+                err(i * vectorSize until (i + 1) * vectorSize)
+            }
+          }
         }
       }
     }
 
     prevLayer.computeNeuronPrimitive(preDelta, input)
     preDelta
+    // throw new NotImplementedError("previousError is not implemented.")
   }
 
-  @inline private def getInSlice(offset: Int): Range = {
-    offset * vectorSize until (offset + windowSize) * vectorSize
-  }
-
-  @inline private def getInDim(input: BDM[Double]): Int = {
-    input.rows / vectorSize
+  @inline private def setIn(
+    offset: Int,
+    channel: Int,
+    input: BDM[Double],
+    in: BDV[Double]): Unit = {
+    for (i <- 0 until windowSize) {
+      val s = offset + i - (windowSize - 1)
+      if (s >= 0 && s < input.rows / vectorSize) {
+        in(i * vectorSize until (i + 1) * vectorSize) :=
+          input(s * vectorSize until (s + 1) * vectorSize, channel)
+      }
+      else {
+        in(i * vectorSize until (i + 1) * vectorSize) := 0.0
+      }
+    }
   }
 
   @inline private def getOutDim(input: BDM[Double]): Int = {
-    getInDim(input) - windowSize + 1
+    // Wide convolution
+    input.rows / vectorSize + windowSize - 1
   }
 
   @inline private def getNeuron(
@@ -582,7 +740,6 @@ private[mllib] class ReLuSentenceInputLayer(
     if (out > 0) 1.0 else 0.0
   }
 }
-
 
 private[mllib] class TanhSentenceInputLayer(
   val weight: BDM[Double],
@@ -651,10 +808,11 @@ private[mllib] object PartialConnectedLayer {
     outChannels: Int,
     windowSize: Int,
     vectorSize: Int,
-    low: Double, high: Double): BDM[Double] = {
+    low: Double,
+    high: Double): BDM[Double] = {
     val weight = BDM.rand[Double](windowSize * vectorSize, inChannels * outChannels)
-    weight :*= (low + high)
-    weight :-= low
+    weight :*= high - low
+    weight :+= low
     weight
   }
 }
