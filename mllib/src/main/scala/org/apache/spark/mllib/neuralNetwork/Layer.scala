@@ -20,7 +20,7 @@ package org.apache.spark.mllib.neuralNetwork
 import java.util.Random
 
 import breeze.linalg.{DenseVector => BDV, Matrix => BM, DenseMatrix => BDM,
-Axis => BrzAxis, sum => brzSum}
+Axis => brzAxis, sum => brzSum, max => brzMax}
 
 import org.apache.spark.Logging
 import org.apache.spark.mllib.linalg.{DenseMatrix => SDM, Matrix => SM,
@@ -58,12 +58,11 @@ private[mllib] trait Layer extends Serializable {
 
   def backward(input: BDM[Double], delta: BDM[Double]): (BDM[Double], BDV[Double]) = {
     val gradWeight: BDM[Double] = delta * input.t
-    val gradBias = brzSum(delta, BrzAxis._1)
+    val gradBias = brzSum(delta, brzAxis._1)
     (gradWeight, gradBias)
   }
 
   def outputError(output: BDM[Double], label: BM[Double]): BDM[Double] = {
-
     val delta: BDM[Double] = if (label.isInstanceOf[BDM[Double]]) {
       output - label.asInstanceOf[BDM[Double]]
     } else {
@@ -176,8 +175,10 @@ private[mllib] class SoftMaxLayer(
   }
 
   def softMax(temp: BDV[Double]): Unit = {
+    // val max = brzMax(temp)
     var sum = 0D
     for (i <- 0 until temp.length) {
+      // temp(i) = Math.exp(temp(i) - max)
       temp(i) = Math.exp(temp(i))
       sum += temp(i)
     }

@@ -43,6 +43,8 @@ class Sentence2vec(
   @transient private lazy val numLayer = numSentenceLayer + mlp.numLayer
   @transient private lazy val rand: Random = new XORShiftRandom()
   @transient private lazy val wordSize: Int = word2Vec.length / vectorSize
+  @transient private lazy val inputWindow: Int = sentenceLayer.head.
+    asInstanceOf[SentenceInputLayer].windowSize
 
   def setWord2Vec(word2Vec: BDV[Double]): Unit = {
     this.word2Vec = word2Vec
@@ -70,8 +72,40 @@ class Sentence2vec(
     sentence: Array[Int],
     sentVec: BDM[Double],
     sentOut: BDV[Double]) = {
+    if (rand.nextDouble() < 0.001) {
+      println(s"sentOut: ${sentOut.valuesIterator.map(_.abs).sum / sentOut.length}")
+    }
     val sentenceSize = sentence.size
-    val randomize = Utils.randomize(0 until sentenceSize).slice(0, 40)
+    val mlpIn = BDM.zeros[Double](vectorSize, 1)
+    val label = BDM.zeros[Double](wordSize, 1)
+    label := (0.1 / wordSize)
+    for (pos <- 0 until sentenceSize) {
+      val word = sentence(pos)
+      mlpIn(::, 0) := sentOut
+      label(word, 0) += (0.9 / sentenceSize)
+    }
+    val (mlpOuts, mlpDeltas) = mlp.computeDelta(mlpIn, label)
+    val mlpGrads = mlp.computeGradientGivenDelta(mlpIn, mlpOuts, mlpDeltas)
+    val cost = NNUtil.crossEntropy(mlpOuts.last, label)
+    val prevDelta: BDM[Double] = mlp.innerLayers.head.weight.t * mlpDeltas.head
+    val inputDelta = prevDelta(::, 0)
+    if (rand.nextDouble() < 0.001) {
+      println(s"mlpDelta: ${inputDelta.valuesIterator.map(_.abs).sum / vectorSize}")
+    }
+    assert(inputDelta.length == vectorSize)
+
+    (inputDelta, mlpGrads, cost)
+  }
+
+  protected[mllib] def mlpComputeGradient2(
+    sentence: Array[Int],
+    sentVec: BDM[Double],
+    sentOut: BDV[Double]) = {
+    if (rand.nextDouble() < 0.001) {
+      println(s"sentOut: ${sentOut.valuesIterator.map(_.abs).sum / sentOut.length}")
+    }
+    val sentenceSize = sentence.size
+    val randomize = Utils.randomize(0 until sentenceSize).slice(0, 1)
     val randomizeSize = randomize.size
     val mlpIn = BDM.zeros[Double](vectorSize, randomizeSize)
     val label = BDM.zeros[Double](wordSize, randomizeSize)
@@ -94,21 +128,27 @@ class Sentence2vec(
         }
         a += 1
       }
+      assert(s > 0)
       sum :/= s
       sum :+= sentOut
       label(word, i) += 0.9
     }
     val (mlpOuts, mlpDeltas) = mlp.computeDelta(mlpIn, label)
     val mlpGrads = mlp.computeGradientGivenDelta(mlpIn, mlpOuts, mlpDeltas)
-    val cost = NNUtil.meanSquaredError(mlpOuts.last, label) / randomizeSize
+    val cost = NNUtil.crossEntropy(mlpOuts.last, label) / randomizeSize
     val prevDelta: BDM[Double] = mlp.innerLayers.head.weight.t * mlpDeltas.head
     val inputDelta = brzSum(prevDelta, brzAxis._1)
     inputDelta :/= randomizeSize.toDouble
+    if (rand.nextDouble() < 0.001) {
+      println(s"inputDelta: ${inputDelta.valuesIterator.map(_.abs).sum / vectorSize}")
+    }
+    assert(inputDelta.length == vectorSize)
 
     (inputDelta, mlpGrads, cost)
   }
 
-  protected[mllib] def sentenceComputeOutputs(sentence: Array[Int],
+  protected[mllib] def sentenceComputeOutputs(
+    sentence: Array[Int],
     x: BDM[Double]): Array[BDM[Double]] = {
     val output = new Array[BDM[Double]](numSentenceLayer)
     for (i <- 0 until numSentenceLayer) {
@@ -148,8 +188,9 @@ class Sentence2vec(
   }
 
   private[mllib] def sentenceToInput(sentence: Array[Int]): BDM[Double] = {
-    val vectors = sentence
-      .map(s => word2Vec(s * vectorSize until (s + 1) * vectorSize))
+    val vectors = sentence.map { s =>
+      word2Vec(s * vectorSize until (s + 1) * vectorSize)
+    }
     BDV.vertcat(vectors.toArray: _*).asDenseMatrix.t
   }
 }
@@ -173,21 +214,44 @@ object Sentence2vec {
         word2Vec(offset + i) = f(i).toDouble
       }
     }
-    val sentenceLayer: Array[BaseLayer] = new Array[BaseLayer](3)
-    sentenceLayer(0) = new TanhSentenceInputLayer(10, 2, vectorSize)
-    sentenceLayer(1) = new TanhSentenceLayer(10, vectorSize / 4, 1)
-    sentenceLayer(2) = new FixedMaxSentencePooling(4)
-    val mlp = new MLP(Array(vectorSize, 64, word2Index.size), 0.2, 0.5)
-    val sent2vec = new Sentence2vec(sentenceLayer, mlp, vectorSize, 2)
+
+    val sentenceLayer: Array[BaseLayer] = new Array[BaseLayer](4)
+    sentenceLayer(0) = new ReLuSentenceInputLayer(16, 7, vectorSize)
+    sentenceLayer(1) = new DynamicKMaxSentencePooling(6, 0.5)
+    val layer = new ReLuSentenceLayer(16, vectorSize / 4, 5)
+    if (layer.outChannels > 1 && layer.inChannels > 1) {
+      val s = layer.outChannels / 2
+      for (i <- 0 until layer.inChannels) {
+        for (j <- 0 until s) {
+          val offset = (i + j) % layer.outChannels
+          layer.connTable(i, offset) = 0.0
+        }
+      }
+    }
+    sentenceLayer(2) = layer
+    sentenceLayer(3) = new KMaxSentencePooling(4)
+    val mlp = new MLP(Array(vectorSize, 32, word2Index.size), 0.5, 0.5)
+    val sent2vec = new Sentence2vec(sentenceLayer, mlp, vectorSize, 5)
     val wordBroadcast = dataset.context.broadcast(word2Vec)
     val momentumSum = new Array[(BDM[Double], BDV[Double])](sent2vec.numLayer)
     for (iter <- 0 until numIter) {
       val sentBroadcast = dataset.context.broadcast(sent2vec)
       val (gradientSum, lossSum, miniBatchSize) = trainOnce(sentences,
         sentBroadcast, wordBroadcast, iter, fraction)
+      if (Utils.random.nextDouble() < 0.05) {
+        sentenceLayer.zipWithIndex.foreach { case (b, i) =>
+          b match {
+            case s: SentenceLayer =>
+              val weight = s.weight
+              println(s"sentenceLayer weight $i: " +
+                weight.valuesIterator.map(_.abs).sum / weight.size)
+            case _ =>
+          }
+        }
+      }
+
       if (miniBatchSize > 0) {
         gradientSum.filter(t => t != null).foreach(m => {
-          // println("m " + m._1.valuesIterator.sum / m._1.size)
           m._1 :/= miniBatchSize.toDouble
           m._2 :/= miniBatchSize.toDouble
         })
@@ -204,8 +268,12 @@ object Sentence2vec {
     gradSum: Array[(BDM[Double], BDV[Double])],
     sent2Vec: Sentence2vec,
     iter: Int,
-    learningRate: Double = 0.01): Unit = {
-    val momentum = if (iter > 10) 0.9 else 0.5
+    learningRate: Double): Unit = {
+    val momentum = if (iter < 32) {
+      math.min(math.pow(1.1, iter) * 0.5, 0.9)
+    } else {
+      0.9
+    }
     val numSentenceLayer = sent2Vec.numSentenceLayer
     mergerParameters(momentumSum, gradSum, momentum)
     for (i <- 0 until numSentenceLayer) {
