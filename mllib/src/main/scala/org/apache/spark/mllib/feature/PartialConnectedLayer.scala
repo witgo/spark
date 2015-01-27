@@ -68,9 +68,9 @@ private[mllib] trait BaseLayer extends Serializable {
 }
 
 
-private[mllib] class FixedMaxSentencePooling(
+private[mllib] class MaxSentencePooling(
   minK_ : Int)
-  extends MaxSentencePooling(minK_, 1.0) {
+  extends DynamicMaxSentencePooling(minK_, 1.0) {
   override def layerType: String = "FixedMaxSentencePooling"
 
   override def forward(input: BDM[Double]): BDM[Double] = {
@@ -81,7 +81,7 @@ private[mllib] class FixedMaxSentencePooling(
   }
 }
 
-private[mllib] class MaxSentencePooling(
+private[mllib] class DynamicMaxSentencePooling(
   val minK: Int,
   val scale: Double) extends BaseLayer {
   override def layerType: String = "MaxSentencePooling"
@@ -593,6 +593,36 @@ private[mllib] class TanhSentenceLayer(
   }
 }
 
+
+private[mllib] class SoftPlusSentenceLayer(
+  val weight: BDM[Double],
+  val bias: BDV[Double],
+  val inChannels: Int,
+  val outChannels: Int,
+  val kernelSize: Int) extends SentenceLayer {
+
+  def this(
+    inChannels: Int,
+    outChannels: Int,
+    kernelSize: Int) {
+    this(initUniformWeight(inChannels, outChannels, kernelSize,
+      1, 0.0, 0.01),
+      initializeBias(outChannels),
+      inChannels, outChannels, kernelSize)
+  }
+
+  override def layerType: String = "SoftPlusSentenceInput"
+
+  override def computeNeuron(sum: Double): Double = {
+    NNUtil.softplus(sum, 32)
+  }
+
+  override def computeNeuronPrimitive(out: Double): Double = {
+    NNUtil.softplusPrimitive(out, 32)
+  }
+
+}
+
 private[mllib] trait SentenceInputLayer extends SentenceLayer {
 
   def inChannels: Int = 1
@@ -711,6 +741,36 @@ private[mllib] trait SentenceInputLayer extends SentenceLayer {
     val colOffset = outChannels * inOffset + outOffset
     weight(::, colOffset)
   }
+}
+
+
+private[mllib] class SoftPlusSentenceInputLayer(
+  val weight: BDM[Double],
+  val bias: BDV[Double],
+  val outChannels: Int,
+  val windowSize: Int,
+  val vectorSize: Int) extends SentenceInputLayer {
+
+  def this(
+    outChannels: Int,
+    windowSize: Int,
+    vectorSize: Int) {
+    this(initUniformWeight(1, outChannels, windowSize, vectorSize,
+      0.0, 0.01),
+      initializeBias(outChannels),
+      outChannels, windowSize, vectorSize)
+  }
+
+  override def layerType: String = "SoftPlusSentenceInput"
+
+  override def computeNeuron(sum: Double): Double = {
+    NNUtil.softplus(sum, 32)
+  }
+
+  override def computeNeuronPrimitive(out: Double): Double = {
+    NNUtil.softplusPrimitive(out, 32)
+  }
+
 }
 
 private[mllib] class ReLuSentenceInputLayer(

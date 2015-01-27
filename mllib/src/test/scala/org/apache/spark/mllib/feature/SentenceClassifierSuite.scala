@@ -22,48 +22,42 @@ import org.scalatest.FunSuite
 import org.apache.spark.mllib.util.MLlibTestSparkContext
 
 import org.apache.spark.SparkContext._
-import breeze.linalg.{norm => brzNorm}
+import breeze.linalg.{norm => brzNorm, argmax => brzArgMax}
 import breeze.linalg.functions.euclideanDistance
 
-//filter(w => w.length > 1).
-//filter(w => !w.contains("_")).
-//filter(w => !w.contains("-"))
-class Sentence2vecSuite extends FunSuite with MLlibTestSparkContext {
+class SentenceClassifierSuite extends FunSuite with MLlibTestSparkContext {
 
-  test("Sentence2vec") {
+  test("SentenceClassifier") {
     val sparkHome = sys.props.getOrElse("spark.test.home", fail("spark.test.home is not set!"))
     import org.apache.spark.mllib.feature._
     import breeze.linalg.{norm => brzNorm}
-    var txt = sc.textFile(s"$sparkHome/data/mllib/data.txt").
+    val txt = sc.textFile(s"$sparkHome/data/mllib/deal_info.txt").
       map(_.split(" ")).
-      filter(_.length > 4).sample(false, 0.5).
+      filter(_.length > 6).
       map(_.toIterable).cache()
     println("txt " + txt.count)
     val word2Vec = new Word2Vec()
     word2Vec.
-      setVectorSize(32).
+      setVectorSize(64).
       setNumIterations(1)
     val model = word2Vec.fit(txt)
-    // txt = txt.repartition(32)
-    val (sent2vec, word2, word2Index) = Sentence2vec.train(txt, model, 2000, 0.05, 0.0005)
-    println(s"word2 ${word2.valuesIterator.map(_.abs).sum / word2.length}")
-    val vecs = txt.map { t =>
-      val vec = t.filter(w => word2Index.contains(w)).map(w => word2Index(w)).toArray
+    val Array(txtTrain, txtTest) = txt.repartition(36).randomSplit(Array(0.5, 0.5))
+    val (sent2vec, wordVec, wordIndex, labelIndex) =
+      SentenceClassifier.train(txtTrain.cache(), model, 20000, 0.1, 0.006)
+    println(s"wordVec ${wordVec.valuesIterator.map(_.abs).sum / wordVec.length}")
+
+    val vecs = txtTest.map { t =>
+      val vec = t.tail.filter(w => wordIndex.contains(w)).map(w => wordIndex(w)).toArray
       (t, vec)
     }.filter(_._2.length > 4).map { sent =>
-      sent2vec.setWord2Vec(word2)
-      val vec = sent2vec.predict(sent._2)
-      (sent._1, vec)
+      sent2vec.setWord2Vec(wordVec)
+      val label = brzArgMax(sent2vec.predict(sent._2))
+      (sent._1.head, label)
     }.cache()
-    vecs.takeSample(false, 10).foreach { case (text, vec) =>
-      println(s"${text.mkString(" ")}")
-      vecs.map(v => {
-        // 余弦相似度
-        val sim: Double = euclideanDistance(v._2, vec)
-        (sim, v._1)
-      }).sortByKey(true).take(4).foreach(t => println(s"${t._1} =>${t._2.mkString(" ")} \n"))
-    }
 
+    val sum = vecs.count
+    val err = vecs.filter(t => labelIndex(t._1) != t._2).count
+    println(s"Error: $err / $sum = ${err.toDouble / sum * 100}")
 
   }
 }
