@@ -535,10 +535,10 @@ private[mllib] class MLPUpdater(val topology: Array[Int]) extends Updater {
 @Experimental
 private[mllib] class MLPAdaGradUpdater(
   val topology: Array[Int],
-  rho: Double = 0D,
+  rho: Double = 1 - 1e-2,
   epsilon: Double = 1e-2,
   gamma: Double = 1e-1,
-  momentum: Double = 0D) extends AdaGradUpdater(rho, epsilon, gamma, momentum) {
+  momentum: Double = 0.9) extends AdaGradUpdater(rho, epsilon, gamma, momentum) {
   override protected def l2(
     weightsOld: SV,
     gradient: SV,
