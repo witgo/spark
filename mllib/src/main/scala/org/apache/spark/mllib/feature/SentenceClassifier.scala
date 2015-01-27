@@ -26,17 +26,15 @@ import org.apache.spark.Logging
 import org.apache.spark.annotation.Experimental
 import org.apache.spark.broadcast.Broadcast
 import org.apache.spark.mllib.neuralNetwork._
-import org.apache.spark.mllib.rdd.RDDFunctions._
 import org.apache.spark.rdd.RDD
 import org.apache.spark.util.Utils
 import org.apache.spark.util.random.XORShiftRandom
 
 @Experimental
-class Sentence2vec(
+class SentenceClassifier(
   val sentenceLayer: Array[BaseLayer],
   val mlp: MLP,
-  val vectorSize: Int,
-  val windowSize: Int) extends Serializable with Logging {
+  val vectorSize: Int) extends Serializable with Logging {
 
   @transient var word2Vec: BDV[Double] = null
   @transient private lazy val numSentenceLayer = sentenceLayer.length
@@ -55,95 +53,45 @@ class Sentence2vec(
     for (i <- 0 until sentenceLayer.length) {
       input = sentenceLayer(i).forward(input)
     }
-    input.toDenseVector
+    val mlpIn = BDM.zeros[Double](input.size, 1)
+    mlpIn(::, 0) := input.toDenseVector
+    val mlpOut = mlp.predict(mlpIn)
+    mlpOut(::, 0)
   }
 
   protected def computeGradient(
-    sentence: Array[Int]): (Array[(BDM[Double], BDV[Double])], Double) = {
+    sentence: Array[Int],
+    label: BDV[Double]): (Array[(BDM[Double], BDV[Double])], Double) = {
     val in = sentenceToInput(sentence)
     val sentOutput = sentenceComputeOutputs(sentence, in)
-    val (prevDelta, mlpGrad, cost) = mlpComputeGradient(sentence, in,
-      sentOutput.last.toDenseVector)
+
+    if (sentOutput.head.valuesIterator.map(_.abs).sum == 0) {
+      println(s"${sentence.mkString(" ")}")
+    }
+
+    val (prevDelta, mlpGrad, cost) = mlpComputeGradient(sentOutput.last.toDenseVector, label)
     val sentGrad = sentenceComputeGradient(sentence, in, prevDelta, sentOutput)
     (sentGrad ++ mlpGrad, cost)
   }
 
   protected[mllib] def mlpComputeGradient(
-    sentence: Array[Int],
-    sentVec: BDM[Double],
-    sentOut: BDV[Double]) = {
+    sentOut: BDV[Double],
+    label: BDV[Double]) = {
     if (rand.nextDouble() < 0.001) {
-      println(s"sentOut: ${sentOut.valuesIterator.map(_.abs).sum / sentOut.length}")
+      println(s"sentOut: ${sentOut.valuesIterator.sum / sentOut.length}")
     }
-    val sentenceSize = sentence.size
-    val mlpIn = BDM.zeros[Double](vectorSize, 1)
-    val label = BDM.zeros[Double](wordSize, 1)
-    label := (0.1 / wordSize)
+    val mlpIn = BDM.zeros[Double](sentOut.length, 1)
+    val mlpLabel = BDM.zeros[Double](label.length, 1)
     mlpIn(::, 0) := sentOut
-    for (pos <- 0 until sentenceSize) {
-      val word = sentence(pos)
-      label(word, 0) += (0.9 / sentenceSize)
-    }
-    val (mlpOuts, mlpDeltas) = mlp.computeDelta(mlpIn, label)
+    mlpLabel(::, 0) := label
+    val (mlpOuts, mlpDeltas) = mlp.computeDelta(mlpIn, mlpLabel)
     val mlpGrads = mlp.computeGradientGivenDelta(mlpIn, mlpOuts, mlpDeltas)
-    val cost = NNUtil.crossEntropy(mlpOuts.last, label)
+    val cost = NNUtil.crossEntropy(mlpOuts.last, mlpLabel)
     val prevDelta: BDM[Double] = mlp.innerLayers.head.weight.t * mlpDeltas.head
     val inputDelta = prevDelta(::, 0)
     if (rand.nextDouble() < 0.001) {
-      println(s"mlpDelta: ${inputDelta.valuesIterator.map(_.abs).sum / vectorSize}")
+      println(s"mlpDelta: ${inputDelta.valuesIterator.sum / vectorSize}")
     }
-    assert(inputDelta.length == vectorSize)
-
-    (inputDelta, mlpGrads, cost)
-  }
-
-  protected[mllib] def mlpComputeGradient2(
-    sentence: Array[Int],
-    sentVec: BDM[Double],
-    sentOut: BDV[Double]) = {
-    if (rand.nextDouble() < 0.001) {
-      println(s"sentOut: ${sentOut.valuesIterator.map(_.abs).sum / sentOut.length}")
-    }
-    val sentenceSize = sentence.size
-    val randomize = Utils.randomize(0 until sentenceSize).slice(0, 1)
-    val randomizeSize = randomize.size
-    val mlpIn = BDM.zeros[Double](vectorSize, randomizeSize)
-    val label = BDM.zeros[Double](wordSize, randomizeSize)
-    label := 0.1 / wordSize
-    for (i <- 0 until randomizeSize) {
-      val pos = randomize(i)
-      val word = sentence(pos)
-      val b = rand.nextInt(windowSize)
-      var s = 0.0
-      val sum = mlpIn(::, i)
-      var a = b
-      while (a < windowSize * 2 + 1 - b) {
-        if (a != windowSize) {
-          val c = pos - windowSize + a
-          if (c >= 0 && c < sentenceSize) {
-            val lastWord = sentence(c)
-            sum :+= wordToVector(lastWord)
-            s += 1
-          }
-        }
-        a += 1
-      }
-      assert(s > 0)
-      sum :/= s
-      sum :+= sentOut
-      label(word, i) += 0.9
-    }
-    val (mlpOuts, mlpDeltas) = mlp.computeDelta(mlpIn, label)
-    val mlpGrads = mlp.computeGradientGivenDelta(mlpIn, mlpOuts, mlpDeltas)
-    val cost = NNUtil.crossEntropy(mlpOuts.last, label) / randomizeSize
-    val prevDelta: BDM[Double] = mlp.innerLayers.head.weight.t * mlpDeltas.head
-    val inputDelta = brzSum(prevDelta, brzAxis._1)
-    inputDelta :/= randomizeSize.toDouble
-    if (rand.nextDouble() < 0.001) {
-      println(s"inputDelta: ${inputDelta.valuesIterator.map(_.abs).sum / vectorSize}")
-    }
-    assert(inputDelta.length == vectorSize)
-
     (inputDelta, mlpGrads, cost)
   }
 
@@ -195,51 +143,80 @@ class Sentence2vec(
   }
 }
 
-object Sentence2vec {
+object SentenceClassifier {
   def train[S <: Iterable[String]](
     dataset: RDD[S],
     word2VecModel: Word2VecModel,
     numIter: Int,
     learningRate: Double,
-    fraction: Double): (Sentence2vec, BDV[Double], Map[String, Int]) = {
+    fraction: Double): (SentenceClassifier, BDV[Double], Map[String, Int], Map[String, Int]) = {
     val wordVectors = word2VecModel.getVectors
     val vectorSize = wordVectors.head._2.size
-    val word2Index = wordVectors.keys.zipWithIndex.toMap
-    val sentences = dataset.map(_.filter(w => word2Index.contains(w))).filter(_.size > 4).
-      map(w => w.map(t => word2Index(t)).toArray)
-    val word2Vec = BDV.zeros[Double](vectorSize * wordVectors.size)
+    val wordIndex = wordVectors.keys.zipWithIndex.toMap
+
+    val labelIndex = dataset.map(_.head).distinct().collect().zipWithIndex.toMap
+    println("label size:" + labelIndex.size)
+    val sentences = dataset.map(t => {
+      (t.head, t.tail.filter(w => wordIndex.contains(w)))
+    }).filter(_._2.size > 4).map(w => {
+      val vec = BDV.zeros[Double](labelIndex.size)
+      vec :+= 0.1 / vec.length
+      vec(labelIndex(w._1)) += 0.9
+      (w._2.map(t => wordIndex(t)).toArray, vec)
+    })
+
+    val wordVec = BDV.zeros[Double](vectorSize * wordVectors.size)
     wordVectors.foreach { case (word, f) =>
-      val offset = word2Index(word) * vectorSize
+      val offset = wordIndex(word) * vectorSize
       for (i <- 0 until f.length) {
-        word2Vec(offset + i) = f(i).toDouble
+        wordVec(offset + i) = f(i).toDouble
       }
     }
 
-    val sentenceLayer: Array[BaseLayer] = new Array[BaseLayer](4)
-    sentenceLayer(0) = new TanhSentenceInputLayer(64, 7, vectorSize)
-    sentenceLayer(1) = new DynamicKMaxSentencePooling(6, 0.5)
-    val layer = new TanhSentenceLayer(64, vectorSize / 4, 5)
-    if (layer.outChannels > 1 && layer.inChannels > 1) {
-      val s = (layer.outChannels * 0.8).floor.toInt
-      for (i <- 0 until layer.inChannels) {
+    val sentenceLayer: Array[BaseLayer] = new Array[BaseLayer](6)
+    sentenceLayer(0) = new TanhSentenceInputLayer(84, 7, vectorSize)
+    sentenceLayer(1) = new DynamicKMaxSentencePooling(7, 0.5)
+    // sentenceLayer(1) = new DynamicMaxSentencePooling(6, 0.5)
+
+    val layer2 = new TanhSentenceLayer(84, 128, 5)
+    if (layer2.outChannels > 1 && layer2.inChannels > 1) {
+      val s = (layer2.outChannels * 0.8).floor.toInt
+      for (i <- 0 until layer2.inChannels) {
         for (j <- 0 until s) {
-          val offset = (i + j) % layer.outChannels
-          layer.connTable(i, offset) = 0.0
+          val offset = (i + j) % layer2.outChannels
+          layer2.connTable(i, offset) = 0.0
         }
       }
     }
-    sentenceLayer(2) = layer
-    sentenceLayer(3) = new KMaxSentencePooling(4)
-    val mlpLayer = initMLPLayers(Array(vectorSize, 32, word2Index.size))
-    val mlp = new MLP(mlpLayer, Array(0.2, 0.0))
-    val sent2vec = new Sentence2vec(sentenceLayer, mlp, vectorSize, 5)
-    val wordBroadcast = dataset.context.broadcast(word2Vec)
+    sentenceLayer(2) = layer2
+    sentenceLayer(3) = new DynamicKMaxSentencePooling(6, 0.5)
+
+    val layer3 = new TanhSentenceLayer(128, 256, 5)
+    if (layer3.outChannels > 1 && layer3.inChannels > 1) {
+      val s = (layer3.outChannels * 0.7).floor.toInt
+      for (i <- 0 until layer3.inChannels) {
+        for (j <- 0 until s) {
+          val offset = (i + j) % layer3.outChannels
+          layer3.connTable(i, offset) = 0.0
+        }
+      }
+    }
+    sentenceLayer(4) = layer3
+    sentenceLayer(5) = new KMaxSentencePooling(2)
+    // sentenceLayer(3) = new MaxSentencePooling(4)
+
+    val mlpLayer = initMLPLayers(Array(256 * 2, 512, labelIndex.size))
+    val mlp = new MLP(mlpLayer, Array(0.5, 0.0))
+    val sent2vec = new SentenceClassifier(sentenceLayer, mlp, vectorSize)
+
+    val wordBroadcast = dataset.context.broadcast(wordVec)
     val momentumSum = new Array[(BDM[Double], BDV[Double])](sent2vec.numLayer)
     val etaSum = new Array[(BDM[Double], BDV[Double])](sent2vec.numLayer)
     for (iter <- 0 until numIter) {
       val sentBroadcast = dataset.context.broadcast(sent2vec)
       val (grad, loss, miniBatchSize) = trainOnce(sentences,
         sentBroadcast, wordBroadcast, iter, fraction)
+
       if (Utils.random.nextDouble() < 0.05) {
         sentenceLayer.zipWithIndex.foreach { case (b, i) =>
           b match {
@@ -262,7 +239,7 @@ object Sentence2vec {
       }
       sentBroadcast.destroy()
     }
-    (sent2vec, word2Vec, word2Index)
+    (sent2vec, wordVec, wordIndex, labelIndex)
   }
 
   // AdaGrad
@@ -270,16 +247,16 @@ object Sentence2vec {
     etaSum: Array[(BDM[Double], BDV[Double])],
     momentumSum: Array[(BDM[Double], BDV[Double])],
     grad: Array[(BDM[Double], BDV[Double])],
-    sent2Vec: Sentence2vec,
+    sent2Vec: SentenceClassifier,
     iter: Int,
     learningRate: Double,
     rho: Double = 1 - 1e-2,
     epsilon: Double = 0.01,
     gamma: Double = 0.1,
     momentum: Double = 0.9): Unit = {
+    val lr = if (iter < 10) learningRate / (10 - iter) else learningRate
     val numSentenceLayer = sent2Vec.numSentenceLayer
     mergerParameters(momentumSum, grad, momentum)
-    val lr = if (iter < 10) learningRate / (10 - iter) else learningRate
 
     for (i <- 0 until etaSum.length) {
       if (momentumSum(i) != null) {
@@ -368,17 +345,17 @@ object Sentence2vec {
   }
 
   def trainOnce(
-    dataset: RDD[Array[Int]],
-    sent2Vec: Broadcast[Sentence2vec],
+    dataset: RDD[(Array[Int], BDV[Double])],
+    sent2Vec: Broadcast[SentenceClassifier],
     word2Vec: Broadcast[BDV[Double]],
     iter: Int,
     fraction: Double): (Array[(BDM[Double], BDV[Double])], Double, Long) = {
     dataset.context.broadcast()
     val numLayer = sent2Vec.value.numLayer
-    dataset.sample(false, fraction).treeAggregate((new Array[(BDM[Double],
+    dataset.sample(false, fraction, 7 * iter + 41).treeAggregate((new Array[(BDM[Double],
       BDV[Double])](numLayer), 0D, 0L))(seqOp = (c, v) => {
       sent2Vec.value.setWord2Vec(word2Vec.value)
-      val g = sent2Vec.value.computeGradient(v)
+      val g = sent2Vec.value.computeGradient(v._1, v._2)
       mergerParameters(c._1, g._1)
       (c._1, c._2 + g._2, c._3 + 1)
     }, combOp = (c1, c2) => {
