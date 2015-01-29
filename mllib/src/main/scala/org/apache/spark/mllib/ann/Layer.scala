@@ -46,7 +46,7 @@ object Layer {
 
 class SigmoidLayer(val numIn: Int, val numOut: Int) extends Layer {
 
-  override def activationInPlace(data: BDM[Double]): Unit = Bsigmoid(data)
+  override def activationInPlace(data: BDM[Double]): Unit = Bsigmoid.inPlace(data)
 
   override def activationDerivative(output: BDM[Double]): BDM[Double] = {
     val derivative = BDM.ones[Double](output.rows, output.cols)
