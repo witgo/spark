@@ -8,17 +8,15 @@ import org.apache.spark.mllib.optimization.{LBFGS, Gradient}
 import org.apache.spark.rdd.RDD
 import org.apache.spark.util.random.XORShiftRandom
 
-trait Layer {
+trait Layer extends Serializable {
 
-  val weights: BDM[Double]
-  val bias: BDV[Double]
   def activationInPlace(data: BDM[Double]): Unit
   def activationDerivative(output: BDM[Double]): BDM[Double]
 
-  val size = weights.rows
-  val inputSize = weights.cols
+  val numIn: Int
+  val numOut: Int
 
-  def evaluate(data: BDM[Double]): BDM[Double] = {
+  def evaluate(data: BDM[Double], weights: BDM[Double], bias: BDV[Double]): BDM[Double] = {
     val output = weights * data
     output(::, *) :+= bias
     activationInPlace(output)
@@ -37,22 +35,16 @@ trait Layer {
 
 object Layer {
 
-  def randomWeights(numIn: Int, numOut: Int, seed: Long = 11L): BDM[Double] = {
+  def randomWeights(numIn: Int, numOut: Int, seed: Long = 11L): (BDM[Double], BDV[Double]) = {
     val rand: XORShiftRandom = new XORShiftRandom(seed)
-    BDM.fill[Double](numIn, numOut){ (rand.nextDouble * 4.8 - 2.4) / numIn }
-  }
-
-  def zeroBias(num: Int): BDV[Double] = {
-    BDV.zeros[Double](num)
+    val weights = BDM.fill[Double](numOut, numIn){ (rand.nextDouble * 4.8 - 2.4) / numIn }
+    val bias = BDV.fill[Double](numOut){ (rand.nextDouble * 4.8 - 2.4) / numIn }
+    (weights, bias)
   }
 
 }
 
-class SigmoidLayer(val weights: BDM[Double], val bias: BDV[Double]) extends Layer {
-
-  def this(numIn: Int, numOut: Int) = {
-    this(Layer.randomWeights(numIn, numOut), Layer.zeroBias(numOut))
-  }
+class SigmoidLayer(val numIn: Int, val numOut: Int) extends Layer {
 
   override def activationInPlace(data: BDM[Double]): Unit = Bsigmoid(data)
 
@@ -64,38 +56,85 @@ class SigmoidLayer(val weights: BDM[Double], val bias: BDV[Double]) extends Laye
   }
 }
 
-class FeedForwardANNModel(val layers: Array[Layer]) {
+class FeedForwardANN(val layers: Array[Layer]) extends Serializable {
+
+}
+
+object FeedForwardANN {
+
+  def multiLayerPerceptron(topology: Array[Int]): FeedForwardANN = {
+    val layers = new Array[Layer](topology.length - 1)
+    for(i <- 0 until topology.length - 1){
+      layers(i) = new SigmoidLayer(topology(i), topology(i + 1))
+    }
+    new FeedForwardANN(layers)
+  }
+
+  def multiLayerPerceptron(data: RDD[(Vector, Vector)], hiddenLayersTopology: Array[Int]): FeedForwardANN = {
+    val dataSample = data.first()
+    val topology = dataSample._1.size +: hiddenLayersTopology :+ dataSample._2.size
+    multiLayerPerceptron(topology)
+  }
+}
+
+class FeedForwardANNModel(val config: FeedForwardANN, val weights: Array[BDM[Double]],
+                          val bias: Array[BDV[Double]]) extends Serializable {
+
+  protected val layers = config.layers
 
   protected val weightCount =
     (for(i <- 0 until layers.length) yield
-      (layers(i).size * layers(i).inputSize + layers(i).size)).sum
+      (layers(i).numOut * layers(i).numIn + layers(i).numOut)).sum
 
   def forward(data: BDM[Double]): Array[BDM[Double]] = {
-    val inputs = new Array[BDM[Double]](layers.length + 1)
-    inputs(0) = data
-    for(i <- 0 until layers.size) {
-      inputs(i + 1) = layers(i).evaluate(inputs(i))
+    val outputs = new Array[BDM[Double]](layers.length)
+    outputs(0) = layers(0).evaluate(data, weights(0), bias(0))
+    for(i <- 1 until layers.size) {
+      outputs(i) = layers(i).evaluate(outputs(i - 1), weights(i), bias(i))
     }
-    inputs
+    outputs
   }
 
+  def predict(data: Vector): Vector = {
+    val result = forward(data.toBreeze.toDenseVector.toDenseMatrix.t)
+    Vectors.dense(result.last.toArray)
+  }
+
+  def predict(data: BDM[Double]): BDM[Double] = {
+    val result = forward(data)
+    result.last
+  }
 }
 
 object FeedForwardANNModel {
 
-  def multiLayerPerceptron(hiddenLayersTopology: Array[Int], data: RDD[(Vector, Vector)]) = {
-    val layers = new Array[Layer](hiddenLayersTopology.size + 1)
-    val firstElt = data.first
-    val topology = firstElt._1.size +: hiddenLayersTopology :+ firstElt._2.size
-    for(i <- 0 until topology.length - 1){
-      layers(i) = new SigmoidLayer(topology(i), topology(i + 1))
-    }
-    new FeedForwardANNModel(layers)
+  def apply(config: FeedForwardANN): FeedForwardANNModel = {
+    val (weights, bias) = randomWeights(config)
+    new FeedForwardANNModel(config, weights, bias)
   }
 
-  def multiLayerPerceptron(hiddenLayersTopology: Array[Int], data: RDD[(Vector, Vector)], weights: Vector) = {
-    null
+  def apply(config: FeedForwardANN, weightsAndBias: Vector): FeedForwardANNModel = {
+    val (weights, bias) = unrollWeights(weightsAndBias, config.layers)
+    new FeedForwardANNModel(config, weights, bias)
   }
+
+  def randomWeights(config: FeedForwardANN, seed: Long = 11L): (Array[BDM[Double]], Array[BDV[Double]]) = {
+    val numLayers = config.layers.length
+    val weights = new Array[BDM[Double]](numLayers)
+    val bias = new Array[BDV[Double]](numLayers)
+    for(i <- 0 until numLayers){
+      val (w, b) = Layer.randomWeights(config.layers(i).numIn, config.layers(i).numOut, seed)
+      weights(i) = w
+      bias(i) = b
+    }
+    (weights, bias)
+  }
+
+  def randomWeights2(config: FeedForwardANN, seed: Long = 11L): Vector = {
+    val (weights, bias) = randomWeights(config, seed)
+    rollWeights(weights, bias)
+  }
+
 
   protected def unrollWeights(weights: linalg.Vector,
                               layers: Array[Layer]): (Array[BDM[Double]], Array[BDV[Double]]) = {
@@ -105,12 +144,20 @@ object FeedForwardANNModel {
     val bias = new Array[BDV[Double]](layers.length)
     var offset = 0
     for(i <- 0 until layers.length){
-      weightMatrices(i) = new BDM[Double](layers(i).size, layers(i).inputSize, weightsCopy, offset)
-      offset += layers(i).size * layers(i).inputSize
-      bias(i) = (new BDV[Double](weightsCopy, offset, 1, layers(i).size))
-      offset += layers(i).size
+      weightMatrices(i) = new BDM[Double](layers(i).numOut, layers(i).numIn, weightsCopy, offset)
+      offset += layers(i).numOut * layers(i).numIn
+      bias(i) = new BDV[Double](weightsCopy, offset, 1, layers(i).numOut)
+      offset += layers(i).numOut
     }
     (weightMatrices, bias)
+  }
+
+  def rollWeights(weightMatrices: Array[BDM[Double]],
+                  bias: Array[BDV[Double]]): Vector = {
+    val total = (for(i <- 0 until weightMatrices.size) yield (weightMatrices(i).size + bias(i).length)).sum
+    val flat = Vectors.dense(new Array[Double](total))
+    rollWeights(weightMatrices, bias, flat)
+    flat
   }
 
   def rollWeights(weightMatricesUpdate: Array[BDM[Double]],
@@ -139,7 +186,7 @@ object FeedForwardANNModel {
 
 /* TODO: modelCreator function might grab other unrelated things in closure! */
 private class BackPropagationGradient(val batchSize: Int,
-                                      modelCreator: Vector => FeedForwardANNModel)
+                                      val config: FeedForwardANN)
   extends Gradient {
 
    override def compute(data: Vector, label: Double, weights: Vector): (Vector, Double) = {
@@ -150,11 +197,11 @@ private class BackPropagationGradient(val batchSize: Int,
 
   override def compute(data: Vector, label: Double, weights: Vector,
                        cumGradient: Vector): Double = {
-    val model = modelCreator(weights)
-    val layers = model.layers
+    val model = FeedForwardANNModel(config, weights)
+    val layers = model.config.layers
     val arrData = data.toArray
-    val inputSize = layers(0).inputSize
-    val outputSize = layers.last.size
+    val inputSize = layers(0).numIn
+    val outputSize = layers.last.numOut
     val realBatchSize = arrData.length / (inputSize + outputSize)
     val input = new BDM(inputSize, realBatchSize, arrData)
     val target = new BDM(outputSize, realBatchSize, arrData, inputSize * realBatchSize)
@@ -170,9 +217,13 @@ private class BackPropagationGradient(val batchSize: Int,
       deltas(i) = if (i == layers.length - 1) {
         layers(i).delta(outputs(i), target)
       } else {
-        layers(i).delta(outputs(i), deltas(i + 1), layers(i + 1).weights)
+        layers(i).delta(outputs(i), deltas(i + 1), model.weights(i + 1))
       }
-      gradientMatrices(i) = deltas(i) * outputs(i - 1).t
+      gradientMatrices(i) = if ( i == 0) {
+        deltas(i) * input.t
+      } else {
+        deltas(i) * outputs(i - 1).t
+      }
       /* NB! dividing by the number of instances in
        * the batch to be transparent for the optimizer */
       gradientMatrices(i) :/= outputs(i).cols.toDouble
@@ -182,7 +233,7 @@ private class BackPropagationGradient(val batchSize: Int,
     //(gradientMatrices, avgDeltas)
     FeedForwardANNModel.rollWeights(gradientMatrices, avgDeltas, cumGradient)
     /* error */
-    val diff = target :- outputs(layers.length)
+    val diff = target :- outputs.last
     val outerError = Bsum(diff :* diff) / 2
     /* NB! dividing by the number of instances in
      * the batch to be transparent for the optimizer */
@@ -191,13 +242,13 @@ private class BackPropagationGradient(val batchSize: Int,
 }
 
 class FFANN private[mllib](
-                                              modelCreator: Vector => FeedForwardANNModel,
+                                              config: FeedForwardANN,
                                               maxNumIterations: Int,
                                               convergenceTol: Double,
                                               batchSize: Int = 1)
   extends Serializable {
 
-  private val gradient = new BackPropagationGradient(batchSize, modelCreator)
+  private val gradient = new BackPropagationGradient(batchSize, config)
   private val updater = new ANNUpdater()
   private val optimizer = new LBFGS(gradient, updater).
     setConvergenceTol(convergenceTol).
@@ -219,7 +270,7 @@ class FFANN private[mllib](
           )
     )
     val weights = optimizer.optimize(data, initialWeights)
-    modelCreator(weights)
+    FeedForwardANNModel(config, weights)
   }
 }
 
@@ -227,12 +278,10 @@ object FFANN {
 
   def train(trainingRDD: RDD[(Vector, Vector)],
             batchSize: Int,
-            hiddenLayersTopology: Array[Int],
-            maxIterations: Int) = {
-    val modelCreator = {
-
-    }
-    null
+            maxIterations: Int,
+            config: FeedForwardANN,
+            initialWeights: Vector) = {
+    new FFANN(config, maxIterations, 1e-4, 1).run(trainingRDD, initialWeights)
   }
 }
 
