@@ -38,14 +38,15 @@ class FANNSuite extends FunSuite with MLlibTestSparkContext {
       (Vectors.dense(features), Vectors.dense(Array(label)))
     }
     val rddData = sc.parallelize(data, 2)
-    val hiddenLayersTopology = Array[Int](5, 4)
+    val hiddenLayersTopology = Array[Int](5)
     val config = FeedForwardANN.multiLayerPerceptron(rddData, hiddenLayersTopology)
-    val initialWeights = FeedForwardANNModel.randomWeights2(config, 0x111)
-    val model = FFANN.train(rddData, 1, 200, config, initialWeights)
+    val initialWeights = FeedForwardANNModel.randomWeights2(config, 23124)
+    val model = FFANN.train(rddData, 1, 20, config, initialWeights)
     val predictionAndLabels = rddData.map { case (input, label) =>
       (model.predict(input)(0), label(0))
     }.collect()
     assert(predictionAndLabels.forall { case (p, l) => (math.round(p) - l) == 0})
+    //predictionAndLabels.foreach(println)
   }
 
 
