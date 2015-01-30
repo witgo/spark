@@ -17,10 +17,8 @@
 
 package org.apache.spark.mllib.ann
 
-import org.apache.spark.mllib.linalg.{DenseVector, Vectors, Vector}
+import org.apache.spark.mllib.linalg.{Vectors}
 import org.apache.spark.mllib.util.MLlibTestSparkContext
-import org.apache.spark.util.random.XORShiftRandom
-import breeze.linalg.{DenseVector => BDV}
 
 import org.scalatest.FunSuite
 
@@ -39,14 +37,13 @@ class FANNSuite extends FunSuite with MLlibTestSparkContext {
     }
     val rddData = sc.parallelize(data, 2)
     val hiddenLayersTopology = Array[Int](5)
-    val config = FeedForwardANN.multiLayerPerceptron(rddData, hiddenLayersTopology)
-    val initialWeights = FeedForwardANNModel.randomWeights2(config, 23124)
-    val model = FFANN.train(rddData, 1, 20, config, initialWeights)
+    val config = FeedForwardTopology.multiLayerPerceptron(rddData, hiddenLayersTopology)
+    val initialWeights = FeedForwardModel.randomWeights2(config, 23124)
+    val model = FeedForwardNetwork.train(rddData, 1, 20, config, initialWeights)
     val predictionAndLabels = rddData.map { case (input, label) =>
       (model.predict(input)(0), label(0))
     }.collect()
     assert(predictionAndLabels.forall { case (p, l) => (math.round(p) - l) == 0})
-    //predictionAndLabels.foreach(println)
   }
 
 

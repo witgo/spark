@@ -1,3 +1,20 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
+ *
+ *    http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 package org.apache.spark.mllib.ann
 
 import breeze.linalg.{DenseMatrix => BDM, DenseVector => BDV, *, sum => Bsum}
@@ -8,6 +25,11 @@ import org.apache.spark.mllib.optimization.{LBFGS, Gradient}
 import org.apache.spark.rdd.RDD
 import org.apache.spark.util.random.XORShiftRandom
 
+/* Layer does not contain weights to let it be a part of Topology, which is lightweight object
+ * that goes in closure with Gradient. New types of layers are implemented by overriding
+ * activation function and its derivative
+ *
+ * */
 trait Layer extends Serializable {
 
   def activationInPlace(data: BDM[Double]): Unit
@@ -23,7 +45,7 @@ trait Layer extends Serializable {
     output
   }
 
-  /* TODO: how to parametrize error? otherwise one has to override this */
+  /* TODO: how to parametrize error & regularization ? otherwise one has to override these two */
   def delta(output: BDM[Double], target: BDM[Double]): BDM[Double] = {
     (output - target) :* activationDerivative(output)
   }
@@ -44,6 +66,7 @@ object Layer {
 
 }
 
+/* Standard type of ANN layer */
 class SigmoidLayer(val numIn: Int, val numOut: Int) extends Layer {
 
   override def activationInPlace(data: BDM[Double]): Unit = Bsigmoid.inPlace(data)
@@ -56,28 +79,38 @@ class SigmoidLayer(val numIn: Int, val numOut: Int) extends Layer {
   }
 }
 
-class FeedForwardANN(val layers: Array[Layer]) extends Serializable {
+/* Class that holds ANN topology, from which a network can be created
+*
+* */
+class FeedForwardTopology(val layers: Array[Layer]) extends Serializable {
 
 }
 
-object FeedForwardANN {
+/* Fabric for standard topologies, such as multi-layer perceprtion, softmax etc.
+*  User implements a custom topology in the same way.
+* */
+object FeedForwardTopology {
 
-  def multiLayerPerceptron(topology: Array[Int]): FeedForwardANN = {
+  def multiLayerPerceptron(topology: Array[Int]): FeedForwardTopology = {
     val layers = new Array[Layer](topology.length - 1)
     for(i <- 0 until topology.length - 1){
       layers(i) = new SigmoidLayer(topology(i), topology(i + 1))
     }
-    new FeedForwardANN(layers)
+    new FeedForwardTopology(layers)
   }
 
-  def multiLayerPerceptron(data: RDD[(Vector, Vector)], hiddenLayersTopology: Array[Int]): FeedForwardANN = {
+  def multiLayerPerceptron(data: RDD[(Vector, Vector)],
+                           hiddenLayersTopology: Array[Int]): FeedForwardTopology = {
     val dataSample = data.first()
     val topology = dataSample._1.size +: hiddenLayersTopology :+ dataSample._2.size
     multiLayerPerceptron(topology)
   }
 }
 
-class FeedForwardANNModel(val config: FeedForwardANN, val weights: Array[BDM[Double]],
+/* Model for feed forward network. Holds weights.
+ * Can be instantiated with a topology and weights.
+ * */
+class FeedForwardModel(val config: FeedForwardTopology, val weights: Array[BDM[Double]],
                           val bias: Array[BDV[Double]]) extends Serializable {
 
   protected val layers = config.layers
@@ -106,19 +139,22 @@ class FeedForwardANNModel(val config: FeedForwardANN, val weights: Array[BDM[Dou
   }
 }
 
-object FeedForwardANNModel {
+/* Fabric for feed forward networks.
+ * */
+object FeedForwardModel {
 
-  def apply(config: FeedForwardANN): FeedForwardANNModel = {
+  def apply(config: FeedForwardTopology): FeedForwardModel = {
     val (weights, bias) = randomWeights(config)
-    new FeedForwardANNModel(config, weights, bias)
+    new FeedForwardModel(config, weights, bias)
   }
 
-  def apply(config: FeedForwardANN, weightsAndBias: Vector): FeedForwardANNModel = {
+  def apply(config: FeedForwardTopology, weightsAndBias: Vector): FeedForwardModel = {
     val (weights, bias) = unrollWeights(weightsAndBias, config.layers)
-    new FeedForwardANNModel(config, weights, bias)
+    new FeedForwardModel(config, weights, bias)
   }
 
-  def randomWeights(config: FeedForwardANN, seed: Long = 11L): (Array[BDM[Double]], Array[BDV[Double]]) = {
+  def randomWeights(config: FeedForwardTopology,
+                    seed: Long = 11L): (Array[BDM[Double]], Array[BDV[Double]]) = {
     val numLayers = config.layers.length
     val weights = new Array[BDM[Double]](numLayers)
     val bias = new Array[BDV[Double]](numLayers)
@@ -130,7 +166,7 @@ object FeedForwardANNModel {
     (weights, bias)
   }
 
-  def randomWeights2(config: FeedForwardANN, seed: Long = 11L): Vector = {
+  def randomWeights2(config: FeedForwardTopology, seed: Long = 11L): Vector = {
     val (weights, bias) = randomWeights(config, seed)
     rollWeights(weights, bias)
   }
@@ -138,7 +174,6 @@ object FeedForwardANNModel {
 
   protected def unrollWeights(weights: linalg.Vector,
                               layers: Array[Layer]): (Array[BDM[Double]], Array[BDV[Double]]) = {
-    //require(weights.size == weightCount)
     val weightsCopy = weights.toArray
     val weightMatrices = new Array[BDM[Double]](layers.length)
     val bias = new Array[BDV[Double]](layers.length)
@@ -154,7 +189,8 @@ object FeedForwardANNModel {
 
   def rollWeights(weightMatrices: Array[BDM[Double]],
                   bias: Array[BDV[Double]]): Vector = {
-    val total = (for(i <- 0 until weightMatrices.size) yield (weightMatrices(i).size + bias(i).length)).sum
+    val total = (for(i <- 0 until weightMatrices.size) yield
+      (weightMatrices(i).size + bias(i).length)).sum
     val flat = Vectors.dense(new Array[Double](total))
     rollWeights(weightMatrices, bias, flat)
     flat
@@ -184,9 +220,12 @@ object FeedForwardANNModel {
 
 }
 
-/* TODO: modelCreator function might grab other unrelated things in closure! */
+/* Back propagation gradient. Implements feed forward network back propagation
+* with the use of Layer's forward and delta functions that can be overridden
+* to change the cost function
+* */
 private class BackPropagationGradient(val batchSize: Int,
-                                      val config: FeedForwardANN)
+                                      val config: FeedForwardTopology)
   extends Gradient {
 
    override def compute(data: Vector, label: Double, weights: Vector): (Vector, Double) = {
@@ -197,7 +236,7 @@ private class BackPropagationGradient(val batchSize: Int,
 
   override def compute(data: Vector, label: Double, weights: Vector,
                        cumGradient: Vector): Double = {
-    val model = FeedForwardANNModel(config, weights)
+    val model = FeedForwardModel(config, weights)
     val layers = model.config.layers
     val arrData = data.toArray
     val inputSize = layers(0).numIn
@@ -205,8 +244,6 @@ private class BackPropagationGradient(val batchSize: Int,
     val realBatchSize = arrData.length / (inputSize + outputSize)
     val input = new BDM(inputSize, realBatchSize, arrData)
     val target = new BDM(outputSize, realBatchSize, arrData, inputSize * realBatchSize)
-
-    /* forward run */
 
     val outputs = model.forward(input)
     val deltas = new Array[BDM[Double]](layers.length)
@@ -230,8 +267,7 @@ private class BackPropagationGradient(val batchSize: Int,
       avgDeltas(i) = Bsum(deltas(i)(*, ::))
       avgDeltas(i) :/= outputs(i).cols.toDouble
     }
-    //(gradientMatrices, avgDeltas)
-    FeedForwardANNModel.rollWeights(gradientMatrices, avgDeltas, cumGradient)
+    FeedForwardModel.rollWeights(gradientMatrices, avgDeltas, cumGradient)
     /* error */
     val diff = target :- outputs.last
     val outerError = Bsum(diff :* diff) / 2
@@ -241,18 +277,16 @@ private class BackPropagationGradient(val batchSize: Int,
   }
 }
 
-class FFANN private[mllib](
-                                              config: FeedForwardANN,
-                                              maxNumIterations: Int,
-                                              convergenceTol: Double,
-                                              batchSize: Int = 1)
+/* MLlib-style trainer class that trains a network given the data and topology
+* */
+class FeedForwardNetwork private[mllib](config: FeedForwardTopology, maxNumIterations: Int,
+                                        convergenceTol: Double, batchSize: Int = 1)
   extends Serializable {
 
   private val gradient = new BackPropagationGradient(batchSize, config)
   private val updater = new ANNUpdater()
   private val optimizer = new LBFGS(gradient, updater).
-    setConvergenceTol(convergenceTol).
-    setNumIterations(maxNumIterations)
+    setConvergenceTol(convergenceTol).setNumIterations(maxNumIterations)
 
   /**
    * Trains the ANN model.
@@ -263,25 +297,48 @@ class FFANN private[mllib](
    * @return ANN model.
    */
   private def run(trainingRDD: RDD[(Vector, Vector)],
-                  initialWeights: Vector): FeedForwardANNModel = {
-    val data = trainingRDD.map(v =>
-        (0.0, Vectors.fromBreeze(
-          BDV.vertcat(v._1.toBreeze.toDenseVector, v._2.toBreeze.toDenseVector))
-          )
-    )
+                  initialWeights: Vector): FeedForwardModel = {
+    val inputSize = config.layers(0).numIn
+    val outputSize = config.layers.last.numOut
+    val data = if (batchSize == 1) {
+      trainingRDD.map(v =>
+        (0.0,
+          Vectors.fromBreeze(BDV.vertcat(
+            v._1.toBreeze.toDenseVector,
+            v._2.toBreeze.toDenseVector))
+          ))
+    } else {
+      trainingRDD.mapPartitions { it =>
+        it.grouped(batchSize).map { seq =>
+          val size = seq.size
+          val bigVector = new Array[Double](inputSize * size + outputSize * size)
+          var i = 0
+          seq.foreach { case (in, out) =>
+            System.arraycopy(in.toArray, 0, bigVector, i * inputSize, inputSize)
+            System.arraycopy(out.toArray, 0, bigVector,
+              inputSize * size + i * outputSize, outputSize)
+            i += 1
+          }
+          (0.0, Vectors.dense(bigVector))
+        }
+      }
+    }
     val weights = optimizer.optimize(data, initialWeights)
-    FeedForwardANNModel(config, weights)
+    FeedForwardModel(config, weights)
   }
 }
 
-object FFANN {
+/* MLlib-style object for the collection of train methods
+ *
+ */
+object FeedForwardNetwork {
 
   def train(trainingRDD: RDD[(Vector, Vector)],
             batchSize: Int,
             maxIterations: Int,
-            config: FeedForwardANN,
+            config: FeedForwardTopology,
             initialWeights: Vector) = {
-    new FFANN(config, maxIterations, 1e-4, 1).run(trainingRDD, initialWeights)
+    new FeedForwardNetwork(config, maxIterations, 1e-4, 1).run(trainingRDD, initialWeights)
   }
 }
 
