@@ -37,7 +37,9 @@ class FANNSuite extends FunSuite with MLlibTestSparkContext {
     }
     val rddData = sc.parallelize(data, 2)
     val hiddenLayersTopology = Array[Int](5)
-    val config = FeedForwardTopology.multiLayerPerceptron(rddData, hiddenLayersTopology)
+    val dataSample = rddData.first()
+    val topology = dataSample._1.size +: hiddenLayersTopology :+ dataSample._2.size
+    val config = FeedForwardTopology.multiLayerPerceptron(topology)
     val initialWeights = FeedForwardModel.randomWeights2(config, 23124)
     val model = FeedForwardNetwork.train(rddData, 1, 20, config, initialWeights)
     val predictionAndLabels = rddData.map { case (input, label) =>

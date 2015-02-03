@@ -98,13 +98,6 @@ object FeedForwardTopology {
     }
     new FeedForwardTopology(layers)
   }
-
-  def multiLayerPerceptron(data: RDD[(Vector, Vector)],
-                           hiddenLayersTopology: Array[Int]): FeedForwardTopology = {
-    val dataSample = data.first()
-    val topology = dataSample._1.size +: hiddenLayersTopology :+ dataSample._2.size
-    multiLayerPerceptron(topology)
-  }
 }
 
 /* Model for feed forward network. Holds weights.
@@ -236,7 +229,9 @@ private class BackPropagationGradient(val batchSize: Int,
 
   override def compute(data: Vector, label: Double, weights: Vector,
                        cumGradient: Vector): Double = {
+    var unrollTime = System.nanoTime()
     val model = FeedForwardModel(config, weights)
+    unrollTime = System.nanoTime() - unrollTime
     val layers = model.config.layers
     val arrData = data.toArray
     val inputSize = layers(0).numIn
@@ -245,11 +240,14 @@ private class BackPropagationGradient(val batchSize: Int,
     val input = new BDM(inputSize, realBatchSize, arrData)
     val target = new BDM(outputSize, realBatchSize, arrData, inputSize * realBatchSize)
 
+    //var forwardTime = System.nanoTime()
     val outputs = model.forward(input)
+    //forwardTime = System.nanoTime() - forwardTime
     val deltas = new Array[BDM[Double]](layers.length)
     val gradientMatrices = new Array[BDM[Double]](layers.length)
     val avgDeltas = new Array[BDV[Double]](layers.length)
     /* back propagation */
+    //var backTime = System.nanoTime()
     for(i <- (layers.length - 1) to (0, -1)){ /* until */
       deltas(i) = if (i == layers.length - 1) {
         layers(i).delta(outputs(i), target)
@@ -267,8 +265,13 @@ private class BackPropagationGradient(val batchSize: Int,
       avgDeltas(i) = Bsum(deltas(i)(*, ::))
       avgDeltas(i) :/= outputs(i).cols.toDouble
     }
+    //backTime = System.nanoTime() - backTime
+    //var rollTime = System.nanoTime()
     FeedForwardModel.rollWeights(gradientMatrices, avgDeltas, cumGradient)
+    //rollTime = System.nanoTime() - rollTime
     /* error */
+    //println("Unroll/forward/back/roll: " + unrollTime + "/" +
+      //forwardTime + "/" + backTime + "/" + rollTime)
     val diff = target :- outputs.last
     val outerError = Bsum(diff :* diff) / 2
     /* NB! dividing by the number of instances in
@@ -338,7 +341,7 @@ object FeedForwardNetwork {
             maxIterations: Int,
             config: FeedForwardTopology,
             initialWeights: Vector) = {
-    new FeedForwardNetwork(config, maxIterations, 1e-4, 1).run(trainingRDD, initialWeights)
+    new FeedForwardNetwork(config, maxIterations, 1e-4, batchSize).run(trainingRDD, initialWeights)
   }
 }
 
