@@ -192,7 +192,7 @@ class LDAModel private[mllib](
     }
     val pi = (ntp * cwp) / (ctp * nwp)
 
-    if (rand.nextDouble() < 0.00001) {
+    if (rand.nextDouble() < 1e-7) {
       println(s"Model Pi: ${pi}")
       println(s"($ntp * $cwp) / ($ctp * $nwp) ")
     }
@@ -383,6 +383,8 @@ object LDAUtils {
     else {
       mid - 1
     }
+
+    // 测试代码验证 index(mid) 大于等于 index(mid - 1) 小于等于 index(mid + 1)
     //  if (greater) {
     //    if (mid < end) assert(ord.gteq(index(mid), key))
     //    if (mid > 0) assert(ord.lteq(index(mid - 1), key))

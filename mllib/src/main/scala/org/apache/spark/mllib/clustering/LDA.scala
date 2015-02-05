@@ -18,12 +18,14 @@
 package org.apache.spark.mllib.clustering
 
 import java.lang.ref.SoftReference
+import java.util.{PriorityQueue => JPriorityQueue}
 import java.util.Random
 
 import scala.collection.mutable
 
 import breeze.collection.mutable.OpenAddressHashArray
-import breeze.linalg.{DenseVector => BDV, HashVector => BHV, SparseVector => BSV, sum => brzSum}
+import breeze.linalg.{Vector => BV, DenseVector => BDV, HashVector => BHV,
+SparseVector => BSV, sum => brzSum}
 
 import org.apache.spark.broadcast.Broadcast
 import org.apache.spark.graphx._
@@ -35,6 +37,7 @@ import org.apache.spark.serializer.KryoRegistrator
 import org.apache.spark.storage.StorageLevel
 import org.apache.spark.SparkContext._
 import org.apache.spark.util.random.XORShiftRandom
+import org.apache.spark.util.Utils
 
 import LDA._
 
@@ -301,8 +304,10 @@ object LDA {
     alphaAS: Double,
     beta: Double): Graph[VD, ED] = {
     val parts = graph.edges.partitions.size
-    val broadcast = graph.edges.context.broadcast(new mutable.HashMap[VertexId, SoftReference[(Double, Table)]]())
-    val docProposal = innerIter % 3 != 2
+    val map = new mutable.HashMap[VertexId, SoftReference[(Double, Table)]]()
+    val broadcast = graph.edges.context.broadcast(map)
+    val docProposal = true
+    // innerIter % 3 != 2
     val nweGraph = graph.mapTriplets(
       (pid, iter) => {
         val gen = new XORShiftRandom(parts * innerIter + pid)
@@ -319,7 +324,7 @@ object LDA {
             val termTopicCounter = triplet.srcAttr
             val docTopicCounter = triplet.dstAttr
             val topics = triplet.attr
-
+            // val docProposal = gen.nextDouble() < 0.5
             var proposalTopicFun: Random => Int = null
             var proposalFun: Int => Double = null
             if (docProposal) {
@@ -332,7 +337,7 @@ object LDA {
               var d = tableMap.get(docId).map(_.get()).orNull
               if (d == null) {
                 d = docTopicCounter.synchronized {
-                  val sv = dSparse(docTopicCounter, alpha)
+                  val sv = dSparse(docTopicCounter)
                   val sum = brzSum(sv)
                   (sum, generateAlias(sv))
                 }
@@ -346,7 +351,7 @@ object LDA {
               proposalFun = docProb(totalTopicCounter, docTopicCounter, alpha, alphaAS, numTokens)
             } else {
               if (wD == null) {
-                val dv = LDA.wDense(totalTopicCounter, numTopics, beta)
+                val dv = LDA.wDense(totalTopicCounter, numTerms, beta)
                 wDSum = brzSum(dv)
                 wD = generateAlias(dv)
               }
@@ -365,11 +370,11 @@ object LDA {
               val tSum = w._1
               val table = if (gen.nextDouble() < tSum / (tSum + wDSum)) w._2 else wD
               proposalTopicFun = sampleAlias(table)
-              proposalFun = wordProb(termTopicCounter, totalTopicCounter, numTerms, beta)
+              proposalFun = wordProb(totalTopicCounter, termTopicCounter, numTerms, beta)
 
             }
 
-            val qFun = tokenTopicProb(docTopicCounter, termTopicCounter, totalTopicCounter,
+            val qFun = tokenTopicProb(totalTopicCounter, docTopicCounter, termTopicCounter,
               beta, alpha, alphaAS, numTokens, numTerms) _
 
             var maxSampleing = 6
@@ -385,17 +390,17 @@ object LDA {
                 }
 
                 if (newTopic != currentTopic) {
-                  if (docProposal && gen.nextDouble() < 1e-4) {
+                  if (docProposal && gen.nextDouble() < 1e-1) {
                     tableMap.synchronized {
                       tableMap -= docId
                     }
                   }
-                  if (!docProposal && gen.nextDouble() < 1e-4) {
+                  if (!docProposal && gen.nextDouble() < 1e-3) {
                     tableMap.synchronized {
                       tableMap -= termId
                     }
                   }
-                  if (gen.nextDouble() < 1e-32) {
+                  if (gen.nextDouble() < 1e-6) {
                     dD = null
                     wD = null
                   }
@@ -419,6 +424,7 @@ object LDA {
             topics
         }
       }, TripletFields.All)
+    map.clear()
     broadcast.unpersist(false)
     nweGraph
   }
@@ -504,7 +510,7 @@ object LDA {
   // scalastyle:off
   /**
    * 这里组合使用 Gibbs sampler 和 Metropolis Hastings sampler
-   * 每次采样的复杂度为 log(K) K 为主题数(应该可以优化为 (2-6)* log(KD) KD 当前文档包含主题数)
+   * 每次采样的复杂度为: O(1)
    * 1. 使用 Gibbs sampler 采样标准LDA公式中词相关部分:
    * 论文LightLDA: Big Topic Models on Modest Compute Clusters 公式(6):
    * ( \frac{{n}_{kd}^{-di}+{\beta }_{w}}{{n}_{k}^{-di}+\bar{\beta }} )
@@ -534,7 +540,7 @@ object LDA {
     val np = pFun(proposalTopic)
 
     val pi = (nq * cp) / (cq * np)
-    if (gen.nextDouble() < 1e-36) {
+    if (gen.nextDouble() < 1e-32) {
       println(s"Pi: ${pi}")
       println(s"($nq * $cp) / ($cq * $np)")
     }
@@ -543,27 +549,26 @@ object LDA {
   }
 
   // scalastyle:off
-  @inline private def tokenTopicProb(
+  private def tokenTopicProb(
+    totalTopicCounter: BDV[Count],
     docTopicCounter: VD,
     termTopicCounter: VD,
-    totalTopicCounter: BDV[Count],
     beta: Double,
     alpha: Double,
-    alphaR: Double,
+    alphaAS: Double,
     numTokens: Double,
-    numTerms: Double
-    )(topic: Int, isAdjustment: Boolean): Double = {
+    numTerms: Double)(topic: Int, isAdjustment: Boolean): Double = {
     val numTopics = docTopicCounter.length
     val adjustment = if (isAdjustment) -1 else 0
-    val ratio = (totalTopicCounter(topic) + adjustment + alphaR) /
-      (numTokens - 1 + alphaR * numTopics)
+    val ratio = (totalTopicCounter(topic) + adjustment + alphaAS) /
+      (numTokens - 1 + alphaAS * numTopics)
     val asPrior = ratio * (alpha * numTopics)
     // 这里移除了常数项 (docLen - 1 + alpha * numTopics)
     (termTopicCounter(topic) + adjustment + beta) *
       (docTopicCounter(topic) + adjustment + asPrior) /
       (totalTopicCounter(topic) + adjustment + (numTerms * beta))
 
-    // 原始公式论文 Rethinking LDA: Why Priors Matter 公式(3)
+    // 原始公式: Rethinking LDA: Why Priors Matter 公式(3)
     // val docLen = brzSum(docTopicCounter)
     // (termTopicCounter(topic) + adjustment + beta) * (docTopicCounter(topic) + adjustment + asPrior) /
     //   ((totalTopicCounter(topic) + adjustment + (numTerms * beta)) * (docLen - 1 + alpha * numTopics))
@@ -572,8 +577,8 @@ object LDA {
   // scalastyle:on
 
   private def wordProb(
-    termTopicCounter: VD,
     totalTopicCounter: BDV[Count],
+    termTopicCounter: VD,
     numTerms: Double,
     beta: Double)(topic: Int): Double = {
     (termTopicCounter(topic) + beta) / (totalTopicCounter(topic) + beta * numTerms)
@@ -586,85 +591,85 @@ object LDA {
     alphaAS: Double,
     numTokens: Double)(topic: Int): Double = {
     val numTopics = totalTopicCounter.length
-    val termSum = numTokens - 1 + alphaAS * numTopics
-    val alphaSum = alpha * numTopics
-    val ratio = (totalTopicCounter(topic) + alphaAS) / termSum
-    docTopicCounter(topic) + ratio * alphaSum
+    val ratio = (totalTopicCounter(topic) + alphaAS) /
+      (numTokens - 1 + alphaAS * numTopics)
+    val asPrior = ratio * (alpha * numTopics)
+    docTopicCounter(topic) + asPrior
   }
 
-  private def generateAlias(sv: BSV[Double]): Table = {
-    val svSum = brzSum(sv)
-    sv :/= svSum
-    generateAlias(sv.index, sv.data, sv.used)
-  }
-
-  private def generateAlias(sv: BHV[Double]): Table = {
+  private def generateAlias(sv: BV[Double]): Table = {
     val used = sv.activeSize
     val svSum = brzSum(sv)
     sv :/= svSum
-    val a = sv.activeIterator.slice(0, used).toArray
-    generateAlias(a.map(_._1), a.map(_._2), used)
+    generateAlias(sv.activeIterator.toArray, used)
   }
 
-  private def generateAlias(sv: BDV[Double]): Table = {
-    val used = sv.length
-    val svSum = brzSum(sv)
-    sv :/= svSum
-    generateAlias((0 until used).toArray, sv.data, used)
+  @transient private lazy val tableOrdering = new scala.math.Ordering[(Int, Double)] {
+    override def compare(x: (Int, Double), y: (Int, Double)): Int = {
+      Ordering.Double.compare(x._2, y._2)
+    }
   }
 
   private def generateAlias(
-    index: Array[Int],
-    data: Array[Double],
+    probs: Array[(Int, Double)],
     used: Int): Table = {
+    val lq = new JPriorityQueue[(Int, Double)](used, tableOrdering)
+    val hq = new JPriorityQueue[(Int, Double)](used, tableOrdering.reverse)
+    val pMean = 1.0 / used
     val a = new mutable.ArrayBuffer[(Int, Int, Double)]()
-    val lq = new mutable.Queue[(Int, Double)]()
-    val hq = new mutable.Queue[(Int, Double)]()
-    for (i <- 0 until used) {
-      val p = index(i)
-      val pi = data(i)
-      if (pi <= 1.0 / used) {
-        lq.enqueue((p, pi))
+    for (o <- 0 until used) {
+      val (i, pi) = probs(o)
+      if (pi < pMean) {
+        lq.add((i, pi))
       } else {
-        hq.enqueue((p, pi))
+        hq.add((i, pi))
       }
     }
-
-    while (!lq.isEmpty && !hq.isEmpty) {
-      val lp = lq.dequeue()
-      val hp = hq.dequeue()
-      val i = lp._1
-      val pi = lp._2
-      val h = hp._1
-      val ph = hp._2
+    while (!lq.isEmpty & !hq.isEmpty) {
+      val (i, pi) = lq.remove()
+      val (h, ph) = hq.remove()
       a += ((i, h, pi))
-      val pd = ph - pi
-      if (pd > 1.0 / used) {
-        hq.enqueue((h, pd))
+      val pd = ph - (pMean - pi)
+      if (pd >= pMean) {
+        hq.add((h, pd))
       } else {
-        lq.enqueue((h, pd))
+        lq.add((h, pd))
       }
     }
-
     while (!hq.isEmpty) {
-      val hp = hq.dequeue()
-      val h = hp._1
-      val ph = hp._2
+      val (h, ph) = hq.remove()
       a += ((h, h, ph))
     }
 
     while (!lq.isEmpty) {
-      val lp = lq.dequeue()
-      val i = lp._1
-      val pi = lp._2
+      val (i, pi) = lq.remove()
       a += ((i, i, pi))
     }
+
+
+    // 测试代码 随即抽样一个样本验证其概率
     val table = a.toArray
+    val (di, dp) = probs(Utils.random.nextInt(probs.length))
+    val ds = table.map { t =>
+      if (t._1 == di) {
+        if (t._2 == t._1) {
+          pMean
+        } else {
+          t._3
+        }
+      } else if (t._2 == di) {
+        pMean - t._3
+      } else {
+        0.0
+      }
+    }.sum
+    assert((ds - dp).abs < 1e-4)
     assert(table.length == used)
+
     table
   }
 
-  def sampleAlias(table: Table)(gen: Random): Int = {
+  private def sampleAlias(table: Table)(gen: Random): Int = {
     val l = table.length
     val bin = gen.nextInt(l)
     val i = table(bin)._1
@@ -680,7 +685,7 @@ object LDA {
   /**
    * \frac{{n}_{kw}}{{n}_{k}+\bar{\beta}}
    */
-  @inline private def wSparse(
+  private def wSparse(
     totalTopicCounter: BDV[Count],
     termTopicCounter: VD,
     numTerms: Double,
@@ -715,24 +720,23 @@ object LDA {
     t
   }
 
-  @inline private def dDense(
+  private def dDense(
     totalTopicCounter: BDV[Count],
     alpha: Double,
     alphaAS: Double,
     numTokens: Double): BDV[Double] = {
     val numTopics = totalTopicCounter.length
     val asPrior = BDV.zeros[Double](numTopics)
-    val termSum = numTokens - 1D + alphaAS * numTopics
-    val alphaSum = alpha * numTopics
+
     for (topic <- 0 until numTopics) {
-      asPrior(topic) = alphaSum * (totalTopicCounter(topic) + alphaAS) / termSum
+      val ratio = (totalTopicCounter(topic) + alphaAS) /
+        (numTokens - 1 + alphaAS * numTopics)
+      asPrior(topic) = ratio * (alpha * numTopics)
     }
     asPrior
   }
 
-  @inline private def dSparse(
-    docTopicCounter: VD,
-    alpha: Double): BSV[Double] = {
+  private def dSparse(docTopicCounter: VD): BSV[Double] = {
     val numTopics = docTopicCounter.length
     val d = BSV.zeros[Double](numTopics)
     docTopicCounter.activeIterator.foreach { t =>
