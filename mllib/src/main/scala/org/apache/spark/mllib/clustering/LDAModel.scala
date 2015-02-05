@@ -26,38 +26,50 @@ sum => brzSum, norm => brzNorm}
 
 import org.apache.spark.mllib.linalg.{Vectors, DenseVector => SDV, SparseVector => SSV}
 
+import LDAUtils._
+
 class LDAModel private[mllib](
   private[mllib] val gtc: BDV[Double],
   private[mllib] val ttc: Array[BSV[Double]],
   val alpha: Double,
-  val beta: Double) extends Serializable {
+  val beta: Double,
+  val alphaAS: Double) extends Serializable {
 
   def this(topicCounts: SDV, topicTermCounts: Array[SSV], alpha: Double, beta: Double) {
     this(new BDV[Double](topicCounts.toArray), topicTermCounts.map(t =>
-      new BSV(t.indices, t.values, t.size)), alpha, beta)
+      new BSV(t.indices, t.values, t.size)), alpha, beta, alpha)
   }
 
-  val (numTopics, numTerms) = (gtc.size, ttc.size)
-  lazy val numTokens = brzSum(gtc)
+  @transient private lazy val numTopics = gtc.size
+  @transient private lazy val numTerms = ttc.size
+  @transient private lazy val numTokens = brzSum(gtc)
+  @transient private lazy val betaSum = numTerms * beta
+  @transient private lazy val alphaSum = numTopics * alpha
+  @transient private lazy val termSum = numTokens + alphaAS * numTopics
 
   def globalTopicCounter = Vectors.fromBreeze(gtc)
 
   def topicTermCounter = ttc.map(t => Vectors.fromBreeze(t))
 
-  def inference(doc: SSV, totalIter: Int = 10, burnIn: Int = 5, rand: Random = new Random): SSV = {
+  def inference(
+    doc: SSV,
+    totalIter: Int = 10,
+    burnIn: Int = 5,
+    rand: Random = new Random): SSV = {
     require(totalIter > burnIn, "totalIter is less than burnInIter")
     require(totalIter > 0, "totalIter is less than 0")
     require(burnIn > 0, "burnInIter is less than 0")
 
     val topicDist = BSV.zeros[Double](numTopics)
-    val bDoc = new BSV[Int](doc.indices, doc.values.map(_.toInt), doc.size)
-    val tokens = vector2Array(bDoc)
+    val tokens = vector2Array(new BSV[Int](doc.indices, doc.values.map(_.toInt), doc.size))
     val topics = new Array[Int](tokens.length)
+
     var docTopicCounter = uniformDistSampler(tokens, topics, rand)
     for (i <- 0 until totalIter) {
       docTopicCounter = sampleTokens(docTopicCounter, tokens, topics, rand)
       if (i + burnIn >= totalIter) topicDist :+= docTopicCounter
     }
+
     topicDist.compact()
     topicDist :/= brzNorm(topicDist, 1)
     Vectors.fromBreeze(topicDist).asInstanceOf[SSV]
@@ -81,30 +93,18 @@ class LDAModel private[mllib](
     tokens: Array[Int],
     topics: Array[Int],
     rand: Random): BSV[Double] = {
-    var d: BSV[Double] = null
     for (i <- 0 until topics.length) {
       val term = tokens(i)
       val currentTopic = topics(i)
-      val docProposal = rand.nextDouble() < 0.5
-      val proposalTopic = if (docProposal) {
-        gibbsSamplerWord(rand, t, w(term))
-      } else {
-        if (d == null) d = this.d(docTopicCounter, alpha)
-        gibbsSamplerDoc(rand, d, alpha, currentTopic)
-      }
-      val newTopic = metropolisHastingsSampler(rand, docTopicCounter, ttc(term),
-        gtc, beta, alpha, alpha, numTokens, numTerms, currentTopic,
-        proposalTopic, docProposal)
-
+      val newTopic = multinomialDistSampler(rand, t, w(term), d(docTopicCounter, term))
       if (newTopic != currentTopic) {
-        docTopicCounter(currentTopic) -= 1D
         docTopicCounter(newTopic) += 1D
+        docTopicCounter(currentTopic) -= 1D
+        topics(i) = newTopic
         if (docTopicCounter(currentTopic) == 0) {
           docTopicCounter.compact()
         }
-        d = null
       }
-      topics(i) = newTopic
     }
     docTopicCounter
   }
@@ -115,186 +115,80 @@ class LDAModel private[mllib](
     rand: Random): BSV[Double] = {
     val docTopicCounter = BSV.zeros[Double](numTopics)
     for (i <- 0 until tokens.length) {
-      val topic = LDAUtils.uniformDistSampler(rand, numTopics)
+      val topic = uniformSampler(rand, numTopics)
       topics(i) = topic
       docTopicCounter(topic) += 1D
     }
     docTopicCounter
   }
 
-  @inline private def gibbsSamplerWord(
+  private def multinomialDistSampler(
     rand: Random,
     t: BDV[Double],
-    w: BSV[Double]): Int = {
-    val distSum = rand.nextDouble * (t(numTopics - 1) + w.data(w.used - 1))
-    val fun = indexWord(t, w) _
-    val topic = LDAUtils.binarySearchInterval(fun, distSum, 0, numTopics, true)
-    math.min(topic, numTopics - 1)
+    w: BSV[Double],
+    d: BSV[Double]): Int = {
+    val lastSum = t(numTopics - 1) + w.data(w.used - 1) + d.data(d.used - 1)
+    val distSum = rand.nextDouble * lastSum
+    val fun = index(t, w, d) _
+    binarySearchInterval(fun, distSum, 0, numTopics, true)
   }
 
-  private def gibbsSamplerDoc(
-    rand: Random,
-    d: BSV[Double],
-    alpha: Double,
-    currentTopic: Int): Int = {
-    val numTopics = d.length
-    val adjustment = -1D
-    val lastSum = d.data(d.used - 1) + alpha * numTopics + adjustment
-    val distSum = rand.nextDouble() * lastSum
-    val fun = (topic: Int) => {
-      val lastSum = LDAUtils.binarySearchSparseVector(topic, d)
-      val tSum = alpha * (topic + 1)
-      if (topic >= currentTopic) lastSum + tSum + adjustment else lastSum + tSum
-    }
-    val topic = LDAUtils.binarySearchInterval(fun, distSum, 0, numTopics, true)
-    math.min(topic, numTopics - 1)
-  }
-
-  @inline private def indexWord(
+  private def index(
     t: BDV[Double],
-    w: BSV[Double])(topic: Int) = {
-    val lastWS = LDAUtils.binarySearchSparseVector(topic, w)
+    w: BSV[Double],
+    d: BSV[Double])(topic: Int) = {
+    val lastDS = binarySearchSparseVector(topic, d)
+    val lastWS = binarySearchSparseVector(topic, w)
     val lastTS = t(topic)
-    lastWS + lastTS
+    lastDS + lastWS + lastTS
   }
 
-  // scalastyle:off
-  def metropolisHastingsSampler(
-    rand: Random,
-    docTopicCounter: BSV[Double],
-    termTopicCounter: BSV[Double],
-    totalTopicCounter: BDV[Double],
-    beta: Double,
-    alpha: Double,
-    alphaAS: Double,
-    numTokens: Double,
-    numTerms: Double,
-    currentTopic: Int,
-    newTopic: Int,
-    docProposal: Boolean): Int = {
-    if (newTopic == currentTopic) return currentTopic
+  private def d(docTopicCounter: BSV[Double], term: Int): BSV[Double] = {
+    val used = docTopicCounter.used
+    val index = docTopicCounter.index
+    val data = docTopicCounter.data
 
-    val ctp = tokenTopicProb(docTopicCounter, termTopicCounter, totalTopicCounter,
-      beta, alpha, alphaAS, numTokens, numTerms, currentTopic, true)
-    val ntp = tokenTopicProb(docTopicCounter, termTopicCounter, totalTopicCounter,
-      beta, alpha, alphaAS, numTokens, numTerms, newTopic, false)
-    val cwp = if (docProposal) {
-      docTopicProb(docTopicCounter, currentTopic, alpha, true)
-    } else {
-      wordTopicProb(termTopicCounter, totalTopicCounter, currentTopic,
-        numTerms, beta)
+    val d = new Array[Double](used)
+    var lastSum = 0D
+    var i = 0
+    while (i < used) {
+      val topic = index(i)
+      val count = data(i)
+      val lastD = count * (ttc(term)(topic) + beta) / (gtc(topic) + betaSum)
+      // val lastD = count * termSum * (ttc(term)(topic) + beta) /
+      // ((gtc(topic) + betaSum) * termSum)
+      lastSum += lastD
+      d(i) = lastSum
+      i += 1
     }
-    val nwp = if (docProposal) {
-      docTopicProb(docTopicCounter, newTopic, alpha, false)
-    } else {
-      wordTopicProb(termTopicCounter, totalTopicCounter, newTopic,
-        numTerms, beta)
-    }
-    val pi = (ntp * cwp) / (ctp * nwp)
-
-    if (rand.nextDouble() < 1e-7) {
-      println(s"Model Pi: ${pi}")
-      println(s"($ntp * $cwp) / ($ctp * $nwp) ")
-    }
-
-    if (rand.nextDouble() < math.min(1.0, pi)) {
-      newTopic
-    } else {
-      currentTopic
-    }
-  }
-
-  // scalastyle:on
-
-  @inline private def tokenTopicProb(
-    docTopicCounter: BSV[Double],
-    termTopicCounter: BSV[Double],
-    totalTopicCounter: BDV[Double],
-    beta: Double,
-    alpha: Double,
-    alphaAS: Double,
-    numTokens: Double,
-    numTerms: Double,
-    topic: Int,
-    isAdjustment: Boolean): Double = {
-    val ratio = (totalTopicCounter(topic) + alphaAS) / (numTokens + alphaAS * numTopics)
-    val asPrior = ratio * (alpha * numTopics)
-    val adjustment = if (isAdjustment) -1.0 else 0.0
-    (termTopicCounter(topic) + beta) * (docTopicCounter(topic) + adjustment + asPrior) /
-      (totalTopicCounter(topic) + (numTerms * beta))
-  }
-
-  @inline private def wordTopicProb(
-    termTopicCounter: BSV[Double],
-    totalTopicCounter: BDV[Double],
-    topic: Int,
-    numTerms: Double,
-    beta: Double): Double = {
-    (termTopicCounter(topic) + beta) / (totalTopicCounter(topic) + beta * numTerms)
-  }
-
-  @inline private def docTopicProb(
-    docTopicCounter: BSV[Double],
-    topic: Int,
-    alpha: Double,
-    isAdjustment: Boolean): Double = {
-    if (isAdjustment) {
-      docTopicCounter(topic) + alpha - 1
-    } else {
-      docTopicCounter(topic) + alpha
-    }
+    new BSV[Double](index, d, used, docTopicCounter.length)
   }
 
   @transient private lazy val t = {
     val t = BDV.zeros[Double](numTopics)
-    val termSum = numTerms * beta
     var lastSum = 0D
-    for (i <- 0 until numTopics) {
-      t(i) = beta / (gtc(i) + termSum)
-      lastSum = t(i) + lastSum
-      t(i) = lastSum
+    for (topic <- 0 until numTopics) {
+      val lastT = beta * alphaSum * (gtc(topic) + alphaAS) /
+        ((gtc(topic) + betaSum) * termSum)
+      lastSum += lastT
+      t(topic) = lastSum
     }
     t
   }
 
   @transient private lazy val w = {
     val w = new Array[BSV[Double]](numTerms)
-    val termSum = numTerms * beta
     for (term <- 0 until numTerms) {
-      val bsv = BSV.zeros[Double](numTopics)
+      w(term) = BSV.zeros[Double](numTopics)
       var lastSum = 0D
       ttc(term).activeIterator.foreach { case (topic, cn) =>
-        bsv(topic) = cn / (gtc(topic) + termSum)
-        lastSum = bsv(topic) + lastSum
-        bsv(topic) = lastSum
+        val lastW = cn * alphaSum * (gtc(topic) + alphaAS) /
+          ((gtc(topic) + betaSum) * termSum)
+        lastSum += lastW
+        w(term)(topic) = lastSum
       }
-      bsv.compact()
-      w(term) = bsv
     }
     w
-  }
-
-
-  @inline private def d(
-    docTopicCounter: BSV[Double],
-    alpha: Double): BSV[Double] = {
-    val numTopics = docTopicCounter.length
-    val used = docTopicCounter.used
-    val index = docTopicCounter.index
-    val data = docTopicCounter.data
-    val d = new Array[Double](used)
-    assert(used > 0)
-    var lastSum = 0D
-    var i = 0
-
-    while (i < used) {
-      val topic = index(i)
-      val lastW = data(i) // + (topic + 1) * alpha
-      lastSum += lastW
-      d(i) = lastSum
-      i += 1
-    }
-    new BSV[Double](index, d, used, numTopics)
   }
 
   private[mllib] def mergeOne(term: Int, topic: Int, inc: Int) = {
@@ -317,34 +211,20 @@ class LDAModel private[mllib](
     }
     this
   }
-
 }
 
 object LDAModel {
   def apply(numTopics: Int, numTerms: Int, alpha: Double = 0.1, beta: Double = 0.01) = {
     new LDAModel(
       BDV.zeros[Double](numTopics),
-      (0 until numTerms).map(_ => BSV.zeros[Double](numTopics)).toArray, alpha, beta)
+      (0 until numTerms).map(_ => BSV.zeros[Double](numTopics)).toArray, alpha, beta, alpha)
   }
 }
 
+private[mllib] object LDAUtils {
 
-object LDAUtils {
-
-  /**
-   * A uniform distribution sampler
-   */
-  @inline private[mllib] def uniformDistSampler(rand: Random, dimension: Int): Int = {
+  def uniformSampler(rand: Random, dimension: Int): Int = {
     rand.nextInt(dimension)
-  }
-
-  def binarySearchArray[K](
-    index: Array[K],
-    key: K,
-    begin: Int,
-    end: Int,
-    greater: Boolean)(implicit ord: Ordering[K], ctag: ClassTag[K]): Int = {
-    binarySearchInterval(i => index(i), key, begin, end, greater)
   }
 
   def binarySearchInterval[K](
@@ -384,7 +264,7 @@ object LDAUtils {
       mid - 1
     }
 
-    // 测试代码验证 index(mid) 大于等于 index(mid - 1) 小于等于 index(mid + 1)
+    // 测试代码 index(mid) 大于等于 index(mid - 1) 小于等于 index(mid + 1)
     //  if (greater) {
     //    if (mid < end) assert(ord.gteq(index(mid), key))
     //    if (mid > 0) assert(ord.lteq(index(mid - 1), key))
@@ -395,7 +275,16 @@ object LDAUtils {
     mid
   }
 
-  @inline private[mllib] def binarySearchSparseVector(index: Int, w: BSV[Double]) = {
+  def binarySearchArray[K](
+    index: Array[K],
+    key: K,
+    begin: Int,
+    end: Int,
+    greater: Boolean)(implicit ord: Ordering[K], ctag: ClassTag[K]): Int = {
+    binarySearchInterval(i => index(i), key, begin, end, greater)
+  }
+
+  def binarySearchSparseVector(index: Int, w: BSV[Double]) = {
     val pos = binarySearchArray(w.index, index, 0, w.used, false)
     if (pos > -1) {
       w.data(pos)
