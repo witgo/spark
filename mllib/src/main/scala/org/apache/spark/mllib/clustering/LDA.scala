@@ -302,15 +302,15 @@ object LDA {
     beta: Double): Graph[VD, ED] = {
     val parts = graph.edges.partitions.size
     val broadcast = graph.edges.context.broadcast(new mutable.HashMap[VertexId, SoftReference[(Double, Table)]]())
-    val docProposal = innerIter % 2 == 1
+    val docProposal = innerIter % 3 != 2
     val nweGraph = graph.mapTriplets(
       (pid, iter) => {
         val gen = new XORShiftRandom(parts * innerIter + pid)
         val tableMap = broadcast.value
         var dD: Table = null
         var dDSum: Double = 0.0
-        var tD: Table = null
-        var tDSum: Double = 0.0
+        var wD: Table = null
+        var wDSum: Double = 0.0
 
         iter.map {
           triplet =>
@@ -319,85 +319,85 @@ object LDA {
             val termTopicCounter = triplet.srcAttr
             val docTopicCounter = triplet.dstAttr
             val topics = triplet.attr
+
+            var proposalTopicFun: Random => Int = null
+            var proposalFun: Int => Double = null
+            if (docProposal) {
+              if (dD == null) {
+                val dv = dDense(totalTopicCounter, alpha, alphaAS, numTokens)
+                dDSum = brzSum(dv)
+                dD = generateAlias(dv)
+              }
+
+              var d = tableMap.get(docId).map(_.get()).orNull
+              if (d == null) {
+                d = docTopicCounter.synchronized {
+                  val sv = dSparse(docTopicCounter, alpha)
+                  val sum = brzSum(sv)
+                  (sum, generateAlias(sv))
+                }
+                tableMap.synchronized {
+                  tableMap.put(docId, new SoftReference(d))
+                }
+              }
+              val dSum = d._1
+              val table = if (gen.nextDouble() < dSum / (dSum + dDSum)) d._2 else dD
+              proposalTopicFun = sampleAlias(table)
+              proposalFun = docProb(totalTopicCounter, docTopicCounter, alpha, alphaAS, numTokens)
+            } else {
+              if (wD == null) {
+                val dv = LDA.wDense(totalTopicCounter, numTopics, beta)
+                wDSum = brzSum(dv)
+                wD = generateAlias(dv)
+              }
+
+              var w = tableMap.get(termId).map(_.get()).orNull
+              if (w == null) {
+                w = termTopicCounter.synchronized {
+                  val sv = wSparse(totalTopicCounter, termTopicCounter, numTerms, beta)
+                  val sum = brzSum(sv)
+                  (sum, generateAlias(sv))
+                }
+                tableMap.synchronized {
+                  tableMap.put(docId, new SoftReference(w))
+                }
+              }
+              val tSum = w._1
+              val table = if (gen.nextDouble() < tSum / (tSum + wDSum)) w._2 else wD
+              proposalTopicFun = sampleAlias(table)
+              proposalFun = wordProb(termTopicCounter, totalTopicCounter, numTerms, beta)
+
+            }
+
+            val qFun = tokenTopicProb(docTopicCounter, termTopicCounter, totalTopicCounter,
+              beta, alpha, alphaAS, numTokens, numTerms) _
+
             var maxSampleing = 6
             while (maxSampleing > 0) {
               maxSampleing -= 1
-              var i = 0
-              while (i < topics.length) {
+              for (i <- 0 until topics.length) {
                 val currentTopic = topics(i)
-                var proposalTopic = -1
-                val proposalFun = if (docProposal) {
-                  var d = tableMap.get(docId).map(_.get()).orNull
-                  if (d == null) {
-                    d = docTopicCounter.synchronized {
-                      val sv = dSparse(docTopicCounter, alpha)
-                      val sum = brzSum(sv)
-                      (sum, generateAlias(sv))
-                    }
-                    tableMap.synchronized {
-                      tableMap.put(docId, new SoftReference(d))
-                    }
-                  }
-                  val dSum = d._1
-
-                  if (dD == null) {
-                    val dv = dDense(totalTopicCounter, alpha, alphaAS, numTokens)
-                    dDSum = brzSum(dv)
-                    dD = generateAlias(dv)
-                  }
-
-                  proposalTopic = sampleAlias(gen,
-                    if (gen.nextDouble() < dSum / (dSum + dDSum)) d._2 else dD)
-
-                  docProb(totalTopicCounter, docTopicCounter, alpha, alphaAS, numTokens) _
-                } else {
-                  var w = tableMap.get(termId).map(_.get()).orNull
-                  if (w == null) {
-                    w = termTopicCounter.synchronized {
-                      val sv = wSparse(totalTopicCounter, termTopicCounter, numTerms, beta)
-                      val sum = brzSum(sv)
-                      (sum, generateAlias(sv))
-                    }
-                    tableMap.synchronized {
-                      tableMap.put(docId, new SoftReference(w))
-                    }
-                  }
-                  val tSum = w._1
-
-                  if (tD == null) {
-                    val dv = LDA.wDense(totalTopicCounter, numTopics, beta)
-                    tDSum = brzSum(dv)
-                    tD = generateAlias(dv)
-                  }
-                  proposalTopic = sampleAlias(gen,
-                    if (gen.nextDouble() < tSum / (tSum + tDSum)) w._2 else tD)
-                  wordProb(termTopicCounter, totalTopicCounter, numTerms, beta) _
-
-                }
-
-                val qFun = tokenTopicProb(docTopicCounter, termTopicCounter, totalTopicCounter,
-                  beta, alpha, alphaAS, numTokens, numTerms) _
-
                 val newTopic = docTopicCounter.synchronized {
                   termTopicCounter.synchronized {
+                    val proposalTopic = proposalTopicFun(gen)
                     tokenSampling(gen, currentTopic, proposalTopic, proposalFun, qFun)
                   }
                 }
 
                 if (newTopic != currentTopic) {
-                  if (gen.nextDouble() < 1e-32) {
+                  if (docProposal && gen.nextDouble() < 1e-4) {
                     tableMap.synchronized {
                       tableMap -= docId
                     }
                   }
-                  if (gen.nextDouble() < 1e-32) {
+                  if (!docProposal && gen.nextDouble() < 1e-4) {
                     tableMap.synchronized {
                       tableMap -= termId
                     }
                   }
                   if (gen.nextDouble() < 1e-32) {
                     dD = null
-                    tD = null
+                    wD = null
                   }
 
                   docTopicCounter.synchronized {
@@ -413,7 +413,7 @@ object LDA {
                   totalTopicCounter(newTopic) += 1
                   topics(i) = newTopic
                 }
-                i += 1
+
               }
             }
             topics
@@ -664,7 +664,7 @@ object LDA {
     table
   }
 
-  def sampleAlias(gen: Random, table: Table): Int = {
+  def sampleAlias(table: Table)(gen: Random): Int = {
     val l = table.length
     val bin = gen.nextInt(l)
     val i = table(bin)._1
