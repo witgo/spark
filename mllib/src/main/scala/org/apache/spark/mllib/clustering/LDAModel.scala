@@ -17,7 +17,11 @@
 
 package org.apache.spark.mllib.clustering
 
+import java.lang.ref.SoftReference
 import java.util.Random
+import java.util.{PriorityQueue => JPriorityQueue}
+
+import org.apache.spark.util.random.XORShiftRandom
 
 import scala.reflect.ClassTag
 
@@ -25,6 +29,7 @@ import breeze.linalg.{Vector => BV, DenseVector => BDV, SparseVector => BSV,
 sum => brzSum, norm => brzNorm}
 
 import org.apache.spark.mllib.linalg.{Vectors, DenseVector => SDV, SparseVector => SSV}
+import org.apache.spark.util.collection.AppendOnlyMap
 
 import LDAUtils._
 
@@ -47,6 +52,18 @@ class LDAModel private[mllib](
   @transient private lazy val alphaSum = numTopics * alpha
   @transient private lazy val termSum = numTokens + alphaAS * numTopics
 
+  @transient private lazy val wordTableCache =
+    new AppendOnlyMap[Int, SoftReference[(Double, Table)]]()
+  @transient private lazy val (t, tSum) = {
+    val dv = tDense(gtc, numTokens, numTerms, alpha, alphaAS, beta)
+    (generateAlias(dv._2, dv._1), dv._1)
+  }
+  @transient private lazy val rand = new XORShiftRandom()
+
+  def setSeed(seed: Long): Unit = {
+    rand.setSeed(seed)
+  }
+
   def globalTopicCounter = Vectors.fromBreeze(gtc)
 
   def topicTermCounter = ttc.map(t => Vectors.fromBreeze(t))
@@ -54,8 +71,7 @@ class LDAModel private[mllib](
   def inference(
     doc: SSV,
     totalIter: Int = 10,
-    burnIn: Int = 5,
-    rand: Random = new Random): SSV = {
+    burnIn: Int = 5): SSV = {
     require(totalIter > burnIn, "totalIter is less than burnInIter")
     require(totalIter > 0, "totalIter is less than 0")
     require(burnIn > 0, "burnInIter is less than 0")
@@ -64,9 +80,9 @@ class LDAModel private[mllib](
     val tokens = vector2Array(new BSV[Int](doc.indices, doc.values.map(_.toInt), doc.size))
     val topics = new Array[Int](tokens.length)
 
-    var docTopicCounter = uniformDistSampler(tokens, topics, rand)
+    var docTopicCounter = uniformDistSampler(tokens, topics)
     for (i <- 0 until totalIter) {
-      docTopicCounter = sampleTokens(docTopicCounter, tokens, topics, rand)
+      docTopicCounter = sampleTokens(docTopicCounter, tokens, topics)
       if (i + burnIn >= totalIter) topicDist :+= docTopicCounter
     }
 
@@ -88,15 +104,31 @@ class LDAModel private[mllib](
     sent
   }
 
+  private[mllib] def uniformDistSampler(
+    tokens: Array[Int],
+    topics: Array[Int]): BSV[Double] = {
+    val docTopicCounter = BSV.zeros[Double](numTopics)
+    for (i <- 0 until tokens.length) {
+      val topic = uniformSampler(rand, numTopics)
+      topics(i) = topic
+      docTopicCounter(topic) += 1D
+    }
+    docTopicCounter
+  }
+
   private[mllib] def sampleTokens(
     docTopicCounter: BSV[Double],
     tokens: Array[Int],
-    topics: Array[Int],
-    rand: Random): BSV[Double] = {
+    topics: Array[Int]): BSV[Double] = {
     for (i <- 0 until topics.length) {
-      val term = tokens(i)
+      val termId = tokens(i)
       val currentTopic = topics(i)
-      val newTopic = multinomialDistSampler(rand, t, w(term), d(docTopicCounter, term))
+      val (dSum, d) = docTable(gtc, ttc(termId), docTopicCounter,
+        currentTopic, numTokens, numTerms, alpha, alphaAS, beta)
+
+      val (wSum, w) = wordTable(wordTableCache, gtc, ttc(termId), termId,
+        numTokens, numTerms, alpha, alphaAS, beta)
+      val newTopic = tokenSampling(rand, t, tSum, w, wSum, d, dSum)
       if (newTopic != currentTopic) {
         docTopicCounter(newTopic) += 1D
         docTopicCounter(currentTopic) -= 1D
@@ -109,86 +141,122 @@ class LDAModel private[mllib](
     docTopicCounter
   }
 
-  private[mllib] def uniformDistSampler(
-    tokens: Array[Int],
-    topics: Array[Int],
-    rand: Random): BSV[Double] = {
-    val docTopicCounter = BSV.zeros[Double](numTopics)
-    for (i <- 0 until tokens.length) {
-      val topic = uniformSampler(rand, numTopics)
-      topics(i) = topic
-      docTopicCounter(topic) += 1D
+  private def tokenSampling(
+    gen: Random,
+    t: Table,
+    tSum: Double,
+    w: Table,
+    wSum: Double,
+    d: Table,
+    dSum: Double): Int = {
+    val distSum = tSum + wSum + dSum
+    val genSum = gen.nextDouble() * distSum
+    if (genSum < dSum) {
+      sampleAlias(gen, d)
+    } else if (genSum < (dSum + wSum)) {
+      sampleAlias(gen, w)
+    } else {
+      sampleAlias(gen, t)
     }
-    docTopicCounter
   }
 
-  private def multinomialDistSampler(
-    rand: Random,
-    t: BDV[Double],
-    w: BSV[Double],
-    d: BSV[Double]): Int = {
-    val lastSum = t(numTopics - 1) + w.data(w.used - 1) + d.data(d.used - 1)
-    val distSum = rand.nextDouble * lastSum
-    val fun = index(t, w, d) _
-    binarySearchInterval(fun, distSum, 0, numTopics, true)
-  }
 
-  private def index(
-    t: BDV[Double],
-    w: BSV[Double],
-    d: BSV[Double])(topic: Int) = {
-    val lastDS = binarySearchSparseVector(topic, d)
-    val lastWS = binarySearchSparseVector(topic, w)
-    val lastTS = t(topic)
-    lastDS + lastWS + lastTS
-  }
-
-  private def d(docTopicCounter: BSV[Double], term: Int): BSV[Double] = {
-    val used = docTopicCounter.used
-    val index = docTopicCounter.index
-    val data = docTopicCounter.data
-
-    val d = new Array[Double](used)
-    var lastSum = 0D
-    var i = 0
-    while (i < used) {
-      val topic = index(i)
-      val count = data(i)
-      val lastD = count * (ttc(term)(topic) + beta) / (gtc(topic) + betaSum)
-      // val lastD = count * termSum * (ttc(term)(topic) + beta) /
-      // ((gtc(topic) + betaSum) * termSum)
-      lastSum += lastD
-      d(i) = lastSum
-      i += 1
-    }
-    new BSV[Double](index, d, used, docTopicCounter.length)
-  }
-
-  @transient private lazy val t = {
+  private def tDense(
+    totalTopicCounter: BDV[Double],
+    numTokens: Double,
+    numTerms: Double,
+    alpha: Double,
+    alphaAS: Double,
+    beta: Double): (Double, BDV[Double]) = {
     val t = BDV.zeros[Double](numTopics)
-    var lastSum = 0D
+    var sum = 0.0
     for (topic <- 0 until numTopics) {
-      val lastT = beta * alphaSum * (gtc(topic) + alphaAS) /
-        ((gtc(topic) + betaSum) * termSum)
-      lastSum += lastT
-      t(topic) = lastSum
+      val last = beta * alphaSum * (totalTopicCounter(topic) + alphaAS) /
+        ((totalTopicCounter(topic) + betaSum) * termSum)
+      t(topic) = last
+      sum += last
     }
-    t
+    (sum, t)
   }
 
-  @transient private lazy val w = {
-    val w = new Array[BSV[Double]](numTerms)
-    for (term <- 0 until numTerms) {
-      w(term) = BSV.zeros[Double](numTopics)
-      var lastSum = 0D
-      ttc(term).activeIterator.foreach { case (topic, cn) =>
-        val lastW = cn * alphaSum * (gtc(topic) + alphaAS) /
-          ((gtc(topic) + betaSum) * termSum)
-        lastSum += lastW
-        w(term)(topic) = lastSum
-      }
+  private def wSparse(
+    totalTopicCounter: BDV[Double],
+    termTopicCounter: BSV[Double],
+    numTokens: Double,
+    numTerms: Double,
+    alpha: Double,
+    alphaAS: Double,
+    beta: Double): (Double, BSV[Double]) = {
+    val w = BSV.zeros[Double](numTopics)
+    var sum = 0.0
+    termTopicCounter.activeIterator.foreach { t =>
+      val topic = t._1
+      val count = t._2
+      val last = count * alphaSum * (totalTopicCounter(topic) + alphaAS) /
+        ((totalTopicCounter(topic) + betaSum) * termSum)
+      w(topic) = last
+      sum += last
     }
-    w
+    (sum, w)
+  }
+
+  private def dSparse(
+    totalTopicCounter: BDV[Double],
+    termTopicCounter: BSV[Double],
+    docTopicCounter: BSV[Double],
+    currentTopic: Int,
+    numTokens: Double,
+    numTerms: Double,
+    alpha: Double,
+    alphaAS: Double,
+    beta: Double): (Double, BSV[Double]) = {
+    val d = BSV.zeros[Double](numTopics)
+    var sum = 0.0
+    docTopicCounter.activeIterator.foreach { t =>
+      val topic = t._1
+      val count = if (currentTopic == topic && t._2 != 1) t._2 - 1 else t._2
+      val last = count * (termTopicCounter(topic) + beta) /
+        (totalTopicCounter(topic) + betaSum)
+      d(topic) = last
+      sum += last
+    }
+    (sum, d)
+  }
+
+  private def wordTable(
+    cacheMap: AppendOnlyMap[Int, SoftReference[(Double, Table)]],
+    totalTopicCounter: BDV[Double],
+    termTopicCounter: BSV[Double],
+    termId: Int,
+    numTokens: Double,
+    numTerms: Double,
+    alpha: Double,
+    alphaAS: Double,
+    beta: Double): (Double, Table) = {
+    var w = cacheMap(termId)
+    if (w == null || w.get() == null) {
+      val t = wSparse(totalTopicCounter, termTopicCounter,
+        numTokens, numTerms, alpha, alphaAS, beta)
+      w = new SoftReference((t._1, generateAlias(t._2, t._1)))
+      cacheMap.update(termId, w)
+
+    }
+    w.get()
+  }
+
+  private def docTable(
+    totalTopicCounter: BDV[Double],
+    termTopicCounter: BSV[Double],
+    docTopicCounter: BSV[Double],
+    currentTopic: Int,
+    numTokens: Double,
+    numTerms: Double,
+    alpha: Double,
+    alphaAS: Double,
+    beta: Double): (Double, Table) = {
+    val d = dSparse(totalTopicCounter, termTopicCounter, docTopicCounter,
+      currentTopic, numTokens, numTerms, alpha, alphaAS, beta)
+    (d._1, generateAlias(d._2, d._1))
   }
 
   private[mllib] def mergeOne(term: Int, topic: Int, inc: Int) = {
@@ -223,74 +291,103 @@ object LDAModel {
 
 private[mllib] object LDAUtils {
 
+  type Table = Array[(Int, Int, Double)]
+
+  @transient private lazy val tableOrdering = new scala.math.Ordering[(Int, Double)] {
+    override def compare(x: (Int, Double), y: (Int, Double)): Int = {
+      Ordering.Double.compare(x._2, y._2)
+    }
+  }
+
+  @transient private lazy val tableReverseOrdering = tableOrdering.reverse
+
+  def generateAlias(sv: BV[Double], sum: Double): Table = {
+    val used = sv.activeSize
+    val probs = sv.activeIterator.slice(0, used)
+    generateAlias(probs, used, sum)
+  }
+
+  def generateAlias(
+    probs: Iterator[(Int, Double)],
+    used: Int,
+    sum: Double): Table = {
+    val pMean = 1.0 / used
+    val table = new Table(used)
+
+    val lq = new JPriorityQueue[(Int, Double)](used, tableOrdering)
+    val hq = new JPriorityQueue[(Int, Double)](used, tableReverseOrdering)
+
+    probs.slice(0, used).foreach { pair =>
+      val i = pair._1
+      val pi = pair._2 / sum
+      if (pi < pMean) {
+        lq.add((i, pi))
+      } else {
+        hq.add((i, pi))
+      }
+    }
+
+    var offset = 0
+    while (!lq.isEmpty & !hq.isEmpty) {
+      val (i, pi) = lq.remove()
+      val (h, ph) = hq.remove()
+      table(offset) = (i, h, pi)
+      val pd = ph - (pMean - pi)
+      if (pd >= pMean) {
+        hq.add((h, pd))
+      } else {
+        lq.add((h, pd))
+      }
+      offset += 1
+    }
+    while (!hq.isEmpty) {
+      val (h, ph) = hq.remove()
+      assert(ph - pMean < 1e-8)
+      table(offset) = (h, h, ph)
+      offset += 1
+    }
+
+    while (!lq.isEmpty) {
+      val (i, pi) = lq.remove()
+      assert(pMean - pi < 1e-8)
+      table(offset) = (i, i, pi)
+      offset += 1
+    }
+
+    // 测试代码 随即抽样一个样本验证其概率
+    //    val (di, dp) = probs(Utils.random.nextInt(used))
+    //    val ds = table.map { t =>
+    //      if (t._1 == di) {
+    //        if (t._2 == t._1) {
+    //          pMean
+    //        } else {
+    //          t._3
+    //        }
+    //      } else if (t._2 == di) {
+    //        pMean - t._3
+    //      } else {
+    //        0.0
+    //      }
+    //    }.sum
+    //    assert((ds - dp).abs < 1e-4)
+
+    table
+  }
+
+  def sampleAlias(gen: Random, table: Table): Int = {
+    val l = table.length
+    val bin = gen.nextInt(l)
+    val i = table(bin)._1
+    val h = table(bin)._2
+    val p = table(bin)._3
+    if (l * p > gen.nextDouble()) {
+      i
+    } else {
+      h
+    }
+  }
+
   def uniformSampler(rand: Random, dimension: Int): Int = {
     rand.nextInt(dimension)
-  }
-
-  def binarySearchInterval[K](
-    index: Int => K,
-    key: K,
-    begin: Int,
-    end: Int,
-    greater: Boolean)(implicit ord: Ordering[K], ctag: ClassTag[K]): Int = {
-    if (begin == end) {
-      return if (greater) end else begin - 1
-    }
-    var b = begin
-    var e = end - 1
-
-    var mid: Int = (e + b) >> 1
-    while (b <= e) {
-      mid = (e + b) >> 1
-      val v = index(mid)
-      if (ord.lt(v, key)) {
-        b = mid + 1
-      }
-      else if (ord.gt(v, key)) {
-        e = mid - 1
-      }
-      else {
-        return mid
-      }
-    }
-    val v = index(mid)
-    mid = if ((greater && ord.gteq(v, key)) || (!greater && ord.lteq(v, key))) {
-      mid
-    }
-    else if (greater) {
-      mid + 1
-    }
-    else {
-      mid - 1
-    }
-
-    // 测试代码 index(mid) 大于等于 index(mid - 1) 小于等于 index(mid + 1)
-    //  if (greater) {
-    //    if (mid < end) assert(ord.gteq(index(mid), key))
-    //    if (mid > 0) assert(ord.lteq(index(mid - 1), key))
-    //  } else {
-    //    if (mid > 0) assert(ord.lteq(index(mid), key))
-    //    if (mid < end - 1) assert(ord.gteq(index(mid + 1), key))
-    //  }
-    mid
-  }
-
-  def binarySearchArray[K](
-    index: Array[K],
-    key: K,
-    begin: Int,
-    end: Int,
-    greater: Boolean)(implicit ord: Ordering[K], ctag: ClassTag[K]): Int = {
-    binarySearchInterval(i => index(i), key, begin, end, greater)
-  }
-
-  def binarySearchSparseVector(index: Int, w: BSV[Double]) = {
-    val pos = binarySearchArray(w.index, index, 0, w.used, false)
-    if (pos > -1) {
-      w.data(pos)
-    }
-    else {
-      0D
-    }
   }
 }
