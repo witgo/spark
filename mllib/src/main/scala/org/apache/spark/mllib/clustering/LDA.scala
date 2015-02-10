@@ -311,7 +311,7 @@ object LDA {
         val gen = new XORShiftRandom(parts * innerIter + pid)
         val docTableCache = new AppendOnlyMap[VertexId, SoftReference[(Double, Table)]]()
         val wordTableCache = new AppendOnlyMap[VertexId, SoftReference[(Double, Table)]]()
-        val qFun = tokenTopicProb(totalTopicCounter, beta, alpha,
+        val p = tokenTopicProb(totalTopicCounter, beta, alpha,
           alphaAS, numTokens, numTerms) _
         val dPFun = docProb(totalTopicCounter, alpha, alphaAS, numTokens) _
         val wPFun = wordProb(totalTopicCounter, numTerms, beta) _
@@ -329,7 +329,7 @@ object LDA {
             val docTopicCounter = triplet.dstAttr
             val topics = triplet.attr
 
-            if (dD == null || gen.nextDouble() < 1e-6) {
+            if (dD == null || gen.nextDouble() < 0) {
               var dv = dDense(totalTopicCounter, alpha, alphaAS, numTokens)
               dDSum = dv._1
               dD = generateAlias(dv._2, dDSum)
@@ -346,25 +346,34 @@ object LDA {
                 termTopicCounter, termId, numTerms, beta)
             }
 
+            var docProposal = gen.nextDouble() < 0.5
             var maxSampling = 8
             while (maxSampling > 0) {
               maxSampling -= 1
+              docProposal = !docProposal
               for (i <- 0 until topics.length) {
                 val currentTopic = topics(i)
-                val docProposal = gen.nextDouble() < 0.5
-                var table: Table = null
-                val pFun = if (docProposal) {
-                  table = if (gen.nextDouble() < dSum / (dSum + dDSum)) d else dD
+                var proposalTopic = -1
+                val q = if (docProposal) {
+                  if (gen.nextDouble() < dDSum / (dSum - 1.0 + dDSum)) {
+                    proposalTopic = sampleAlias(gen, dD)
+                  }
+                  else {
+                    proposalTopic = docTopicCounter.synchronized {
+                      sampleDoc(gen, d, docTopicCounter, currentTopic)
+                    }
+                  }
                   dPFun
                 } else {
-                  table = if (gen.nextDouble() < wSum / (wSum + wDSum)) w else wD
+                  val table = if (gen.nextDouble() < wSum / (wSum + wDSum)) w else wD
+                  proposalTopic = sampleAlias(gen, table)
                   wPFun
                 }
 
                 val newTopic = docTopicCounter.synchronized {
                   termTopicCounter.synchronized {
                     tokenSampling(gen, docTopicCounter, termTopicCounter, docProposal,
-                      currentTopic, sampleAlias(gen, table), pFun, qFun)
+                      currentTopic, proposalTopic, q, p)
                   }
                 }
 
@@ -499,19 +508,19 @@ object LDA {
     docProposal: Boolean,
     currentTopic: Int,
     proposalTopic: Int,
-    pFun: (VD, Int) => Double,
-    qFun: (VD, VD, Int, Boolean) => Double): Int = {
+    q: (VD, Int) => Double,
+    p: (VD, VD, Int, Boolean) => Double): Int = {
     if (proposalTopic == currentTopic) return proposalTopic
-    val cq = qFun(docTopicCounter, termTopicCounter, currentTopic, true)
-    val nq = qFun(docTopicCounter, termTopicCounter, proposalTopic, false)
+    val cp = p(docTopicCounter, termTopicCounter, currentTopic, true)
+    val np = p(docTopicCounter, termTopicCounter, proposalTopic, false)
     val vd = if (docProposal) docTopicCounter else termTopicCounter
-    val cp = pFun(vd, currentTopic)
-    val np = pFun(vd, proposalTopic)
+    val cq = q(vd, currentTopic)
+    val nq = q(vd, proposalTopic)
 
-    val pi = (nq * cp) / (cq * np)
+    val pi = (np * cq) / (cp * nq)
     if (gen.nextDouble() < 1e-32) {
       println(s"Pi: ${pi}")
-      println(s"($nq * $cp) / ($cq * $np)")
+      println(s"($np * $cq) / ($cp * $nq)")
     }
 
     if (gen.nextDouble() < math.min(1.0, pi)) proposalTopic else currentTopic
@@ -625,6 +634,7 @@ object LDA {
     (sum, d)
   }
 
+
   private def dDense(
     totalTopicCounter: BDV[Count],
     alpha: Double,
@@ -650,7 +660,7 @@ object LDA {
     docTopicCounter: VD,
     docId: VertexId): (Double, Table) = {
     var d = cacheMap(docId)
-    if (d == null || d.get() == null || gen.nextDouble() < 1e-6) {
+    if (d == null || d.get() == null || gen.nextDouble() < 0) {
       docTopicCounter.synchronized {
         val sv = dSparse(docTopicCounter)
         d = new SoftReference((sv._1, generateAlias(sv._2, sv._1)))
@@ -669,7 +679,7 @@ object LDA {
     numTerms: Double,
     beta: Double): (Double, Table) = {
     var w = cacheMap(termId)
-    if (w == null || w.get() == null || gen.nextDouble() < 1e-6) {
+    if (w == null || w.get() == null || gen.nextDouble() < 0) {
       termTopicCounter.synchronized {
         val sv = wSparse(totalTopicCounter, termTopicCounter, numTerms, beta)
         w = new SoftReference((sv._1, generateAlias(sv._2, sv._1)))
@@ -677,6 +687,18 @@ object LDA {
       }
     }
     w.get()
+  }
+
+  private def sampleDoc(gen: Random, table: Table, sv: VD, currentTopic: Int): Int = {
+    val docTopic = sampleAlias(gen, table)
+    if (docTopic == currentTopic) {
+      val svCounter = sv(currentTopic)
+      if ((svCounter == 1 && table.length > 1) ||
+        (svCounter > 1 && gen.nextDouble() < 1.0 / svCounter)) {
+        return sampleDoc(gen, table, sv, currentTopic)
+      }
+    }
+    docTopic
   }
 }
 
