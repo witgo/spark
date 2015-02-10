@@ -329,7 +329,7 @@ object LDA {
             val docTopicCounter = triplet.dstAttr
             val topics = triplet.attr
 
-            if (dD == null || gen.nextDouble() < 0) {
+            if (dD == null || gen.nextDouble() < 1e-3) {
               var dv = dDense(totalTopicCounter, alpha, alphaAS, numTokens)
               dDSum = dv._1
               dD = generateAlias(dv._2, dDSum)
@@ -339,10 +339,14 @@ object LDA {
               wD = generateAlias(dv._2, wDSum)
             }
             val (dSum, d) = docTopicCounter.synchronized {
-              docTable(gen, docTableCache, docTopicCounter, docId)
+              docTable(x => {
+                x == null || x.get() == null || gen.nextDouble() < 1e-1
+              }, docTableCache, docTopicCounter, docId)
             }
             val (wSum, w) = termTopicCounter.synchronized {
-              wordTable(gen, wordTableCache, totalTopicCounter,
+              wordTable(x => {
+                x == null || x.get() == null || gen.nextDouble() < 1e-2
+              }, wordTableCache, totalTopicCounter,
                 termTopicCounter, termId, numTerms, beta)
             }
 
@@ -655,12 +659,12 @@ object LDA {
   }
 
   private def docTable(
-    gen: Random,
+    updateFunc: SoftReference[(Double, Table)] => Boolean,
     cacheMap: AppendOnlyMap[VertexId, SoftReference[(Double, Table)]],
     docTopicCounter: VD,
     docId: VertexId): (Double, Table) = {
     var d = cacheMap(docId)
-    if (d == null || d.get() == null || gen.nextDouble() < 0) {
+    if (updateFunc(d)) {
       docTopicCounter.synchronized {
         val sv = dSparse(docTopicCounter)
         d = new SoftReference((sv._1, generateAlias(sv._2, sv._1)))
@@ -671,7 +675,7 @@ object LDA {
   }
 
   private def wordTable(
-    gen: Random,
+    updateFunc: SoftReference[(Double, Table)] => Boolean,
     cacheMap: AppendOnlyMap[VertexId, SoftReference[(Double, Table)]],
     totalTopicCounter: BDV[Count],
     termTopicCounter: VD,
@@ -679,7 +683,7 @@ object LDA {
     numTerms: Double,
     beta: Double): (Double, Table) = {
     var w = cacheMap(termId)
-    if (w == null || w.get() == null || gen.nextDouble() < 0) {
+    if (updateFunc(w)) {
       termTopicCounter.synchronized {
         val sv = wSparse(totalTopicCounter, termTopicCounter, numTerms, beta)
         w = new SoftReference((sv._1, generateAlias(sv._2, sv._1)))
@@ -693,6 +697,10 @@ object LDA {
     val docTopic = sampleAlias(gen, table)
     if (docTopic == currentTopic) {
       val svCounter = sv(currentTopic)
+      // 这里的处理方法不太对.
+      // 如果采样到当前token的Topic这丢弃掉
+      // svCounter == 1 && table.length > 1 采样到token的Topic 但包含其他token
+      // svCounter > 1 && gen.nextDouble() < 1.0 / svCounter 采样的Topic 有1/svCounter 概率属于当前token
       if ((svCounter == 1 && table.length > 1) ||
         (svCounter > 1 && gen.nextDouble() < 1.0 / svCounter)) {
         return sampleDoc(gen, table, sv, currentTopic)
