@@ -20,9 +20,7 @@ package org.apache.spark.mllib.clustering
 import java.lang.ref.SoftReference
 import java.util.Random
 
-import breeze.collection.mutable.OpenAddressHashArray
-import breeze.linalg.{DenseVector => BDV, HashVector => BHV,
-SparseVector => BSV, sum => brzSum}
+import breeze.linalg.{DenseVector => BDV, SparseVector => BSV, sum => brzSum}
 
 import org.apache.spark.broadcast.Broadcast
 import org.apache.spark.graphx._
@@ -35,7 +33,6 @@ import org.apache.spark.storage.StorageLevel
 import org.apache.spark.SparkContext._
 import org.apache.spark.util.collection.AppendOnlyMap
 import org.apache.spark.util.random.XORShiftRandom
-import org.apache.spark.util.Utils
 
 import LDA._
 import LDAUtils._
@@ -86,8 +83,7 @@ class LDA private[mllib](
     if (innerIter % 10 == 0 && sc.getCheckpointDir.isDefined) {
       val edges = corpus.edges.map(t => t)
       edges.checkpoint()
-      val newCorpus: Graph[VD, ED] = Graph.fromEdges(edges, null,
-        storageLevel, storageLevel)
+      val newCorpus: Graph[VD, ED] = Graph.fromEdges(edges, null, storageLevel, storageLevel)
       corpus = updateCounter(newCorpus, numTopics).persist(storageLevel)
     }
   }
@@ -128,8 +124,7 @@ class LDA private[mllib](
       val newTermTopicCounter = termVertices
       termTopicCounter = Option(termTopicCounter).map(_.join(newTermTopicCounter).map {
         case (term, (a, b)) =>
-          val c = new BHV(a) + new BHV(b)
-          (term, c.array)
+          (term, a :+ b)
       }).getOrElse(newTermTopicCounter)
 
       termTopicCounter.cache().count()
@@ -138,7 +133,7 @@ class LDA private[mllib](
     }
     val model = LDAModel(numTopics, numTerms, alpha, beta)
     termTopicCounter.collect().foreach { case (term, counter) =>
-      model.merge(term.toInt, new BHV(counter))
+      model.merge(term.toInt, counter)
     }
     model.gtc :/= burnInIter.toDouble
     model.ttc.foreach { ttc =>
@@ -210,14 +205,14 @@ class LDA private[mllib](
     val termProb = corpus.mapVertices { (vid, counter) =>
       val probDist = BSV.zeros[Double](numTopics)
       if (vid >= 0) {
-        val termTopicCounter = new BHV(counter)
+        val termTopicCounter = counter
         // \frac{{n}_{kw}{\alpha }_{k}}{{n}_{k}+\bar{\beta }}
         termTopicCounter.activeIterator.foreach { case (topic, cn) =>
           probDist(topic) = cn * alpha /
             (totalTopicCounter(topic) + numTerms * beta)
         }
       } else {
-        val docTopicCounter = new BHV(counter)
+        val docTopicCounter = counter
         // \frac{{n}_{kd}{\beta }_{w}}{{n}_{k}+\bar{\beta }}
         docTopicCounter.activeIterator.foreach { case (topic, cn) =>
           probDist(topic) = cn * beta /
@@ -229,7 +224,7 @@ class LDA private[mllib](
     }.mapTriplets { triplet =>
       val (termTopicCounter, termProb) = triplet.srcAttr
       val (docTopicCounter, docProb) = triplet.dstAttr
-      val docSize = brzSum(new BHV(docTopicCounter))
+      val docSize = brzSum(docTopicCounter)
       val docTermSize = triplet.attr.length
       var prob = 0D
 
@@ -254,7 +249,7 @@ object LDA {
   private[mllib] type WordId = VertexId
   private[mllib] type Count = Int
   private[mllib] type ED = Array[Count]
-  private[mllib] type VD = OpenAddressHashArray[Int]
+  private[mllib] type VD = BSV[Count]
 
   def train(docs: RDD[(DocId, SSV)],
     numTopics: Int = 2048,
@@ -324,9 +319,9 @@ object LDA {
                 tSum = dv._1
               }
 
-              val (dSum, d) = docTopicCounter.synchronized {
+              val d = docTopicCounter.synchronized {
                 termTopicCounter.synchronized {
-                  docTable(totalTopicCounter, termTopicCounter, docTopicCounter,
+                  dSparse(totalTopicCounter, termTopicCounter, docTopicCounter,
                     currentTopic, numTokens, numTerms, alpha, alphaAS, beta)
                 }
               }
@@ -336,7 +331,7 @@ object LDA {
               }
               val newTopic = docTopicCounter.synchronized {
                 termTopicCounter.synchronized {
-                  tokenSampling(gen, t, tSum, w, wSum, d, dSum)
+                  tokenSampling(gen, t, tSum, w, wSum, d)
                 }
               }
 
@@ -365,7 +360,7 @@ object LDA {
   }
 
   private def updateCounter(graph: Graph[VD, ED], numTopics: Int): Graph[VD, ED] = {
-    val newCounter = graph.aggregateMessages[BSV[Count]](ctx => {
+    val newCounter = graph.aggregateMessages[VD](ctx => {
       val topics = ctx.attr
       val vector = BSV.zeros[Count](numTopics)
       for (topic <- topics) {
@@ -373,20 +368,14 @@ object LDA {
       }
       ctx.sendToDst(vector)
       ctx.sendToSrc(vector)
-    }, _ + _, TripletFields.EdgeOnly).mapValues { a =>
-      val b = new VD(a.length)
-      a.activeIterator.foreach { t =>
-        b(t._1) = t._2
-      }
-      b
-    }
+    }, _ + _, TripletFields.EdgeOnly)
     graph.joinVertices(newCounter)((_, _, nc) => nc)
   }
 
   private def collectGlobalCounter(graph: Graph[VD, ED], numTopics: Int): BDV[Count] = {
     graph.vertices.filter(t => t._1 >= 0).map(_._2).
       aggregate(BDV.zeros[Count](numTopics))((a, b) => {
-      a :+= new BHV(b)
+      a :+= b
     }, _ :+= _)
   }
 
@@ -467,12 +456,17 @@ object LDA {
     tSum: Double,
     w: Table,
     wSum: Double,
-    d: Table,
-    dSum: Double): Int = {
+    d: BSV[Double]): Int = {
+    val index = d.index
+    val data = d.data
+    val used = d.used
+    val dSum = data(d.used - 1)
     val distSum = tSum + wSum + dSum
     val genSum = gen.nextDouble() * distSum
     if (genSum < dSum) {
-      sampleAlias(gen, d)
+      val dGenSum = gen.nextDouble() * dSum
+      val pos = binarySearchInterval(data, dGenSum, 0, used, true)
+      index(pos)
     } else if (genSum < (dSum + wSum)) {
       sampleAlias(gen, w)
     } else {
@@ -537,7 +531,7 @@ object LDA {
     numTerms: Double,
     alpha: Double,
     alphaAS: Double,
-    beta: Double): (Double, BSV[Double]) = {
+    beta: Double): BSV[Double] = {
     val numTopics = totalTopicCounter.length
     // val termSum = numTokens - 1D + alphaAS * numTopics
     val betaSum = numTerms * beta
@@ -550,10 +544,10 @@ object LDA {
       //  ((totalTopicCounter(topic) + betaSum) * termSum)
       val last = count * (termTopicCounter(topic) + beta) /
         (totalTopicCounter(topic) + betaSum)
-      d(topic) = last
       sum += last
+      d(topic) = sum
     }
-    (sum, d)
+    d
   }
 
   private def wordTable(
@@ -577,21 +571,6 @@ object LDA {
       }
     }
     w.get()
-  }
-
-  private def docTable(
-    totalTopicCounter: BDV[Count],
-    termTopicCounter: VD,
-    docTopicCounter: VD,
-    currentTopic: Int,
-    numTokens: Double,
-    numTerms: Double,
-    alpha: Double,
-    alphaAS: Double,
-    beta: Double): (Double, Table) = {
-    val d = dSparse(totalTopicCounter, termTopicCounter, docTopicCounter,
-      currentTopic, numTokens, numTerms, alpha, alphaAS, beta)
-    (d._1, generateAlias(d._2, d._1))
   }
 
 }

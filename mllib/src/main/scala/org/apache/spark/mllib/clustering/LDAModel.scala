@@ -123,12 +123,12 @@ class LDAModel private[mllib](
     for (i <- 0 until topics.length) {
       val termId = tokens(i)
       val currentTopic = topics(i)
-      val (dSum, d) = docTable(gtc, ttc(termId), docTopicCounter,
+      val d = dSparse(gtc, ttc(termId), docTopicCounter,
         currentTopic, numTokens, numTerms, alpha, alphaAS, beta)
 
       val (wSum, w) = wordTable(wordTableCache, gtc, ttc(termId), termId,
         numTokens, numTerms, alpha, alphaAS, beta)
-      val newTopic = tokenSampling(rand, t, tSum, w, wSum, d, dSum)
+      val newTopic = tokenSampling(rand, t, tSum, w, wSum, d)
       if (newTopic != currentTopic) {
         docTopicCounter(newTopic) += 1D
         docTopicCounter(currentTopic) -= 1D
@@ -147,12 +147,17 @@ class LDAModel private[mllib](
     tSum: Double,
     w: Table,
     wSum: Double,
-    d: Table,
-    dSum: Double): Int = {
+    d: BSV[Double]): Int = {
+    val index = d.index
+    val data = d.data
+    val used = d.used
+    val dSum = data(d.used - 1)
     val distSum = tSum + wSum + dSum
     val genSum = gen.nextDouble() * distSum
     if (genSum < dSum) {
-      sampleAlias(gen, d)
+      val dGenSum = gen.nextDouble() * dSum
+      val pos = binarySearchInterval(data, dGenSum, 0, used, true)
+      index(pos)
     } else if (genSum < (dSum + wSum)) {
       sampleAlias(gen, w)
     } else {
@@ -209,18 +214,23 @@ class LDAModel private[mllib](
     numTerms: Double,
     alpha: Double,
     alphaAS: Double,
-    beta: Double): (Double, BSV[Double]) = {
+    beta: Double): BSV[Double] = {
+    val numTopics = totalTopicCounter.length
+    // val termSum = numTokens - 1D + alphaAS * numTopics
+    val betaSum = numTerms * beta
     val d = BSV.zeros[Double](numTopics)
     var sum = 0.0
     docTopicCounter.activeIterator.foreach { t =>
       val topic = t._1
       val count = if (currentTopic == topic && t._2 != 1) t._2 - 1 else t._2
+      // val last = count * termSum * (termTopicCounter(topic) + beta) /
+      //  ((totalTopicCounter(topic) + betaSum) * termSum)
       val last = count * (termTopicCounter(topic) + beta) /
         (totalTopicCounter(topic) + betaSum)
-      d(topic) = last
       sum += last
+      d(topic) = sum
     }
-    (sum, d)
+    d
   }
 
   private def wordTable(
@@ -242,21 +252,6 @@ class LDAModel private[mllib](
 
     }
     w.get()
-  }
-
-  private def docTable(
-    totalTopicCounter: BDV[Double],
-    termTopicCounter: BSV[Double],
-    docTopicCounter: BSV[Double],
-    currentTopic: Int,
-    numTokens: Double,
-    numTerms: Double,
-    alpha: Double,
-    alphaAS: Double,
-    beta: Double): (Double, Table) = {
-    val d = dSparse(totalTopicCounter, termTopicCounter, docTopicCounter,
-      currentTopic, numTokens, numTerms, alpha, alphaAS, beta)
-    (d._1, generateAlias(d._2, d._1))
   }
 
   private[mllib] def mergeOne(term: Int, topic: Int, inc: Int) = {
@@ -389,5 +384,52 @@ private[mllib] object LDAUtils {
 
   def uniformSampler(rand: Random, dimension: Int): Int = {
     rand.nextInt(dimension)
+  }
+
+  def binarySearchInterval(
+    index: Array[Double],
+    key: Double,
+    begin: Int,
+    end: Int,
+    greater: Boolean): Int = {
+    if (begin == end) {
+      return if (greater) end else begin - 1
+    }
+    var b = begin
+    var e = end - 1
+
+    var mid: Int = (e + b) >> 1
+    while (b <= e) {
+      mid = (e + b) >> 1
+      val v = index(mid)
+      if (v < key) {
+        b = mid + 1
+      }
+      else if (v > key) {
+        e = mid - 1
+      }
+      else {
+        return mid
+      }
+    }
+    val v = index(mid)
+    mid = if ((greater && v >= key) || (!greater && v <= key)) {
+      mid
+    }
+    else if (greater) {
+      mid + 1
+    }
+    else {
+      mid - 1
+    }
+
+    if (greater) {
+      if (mid < end) assert(index(mid) >= key)
+      if (mid > 0) assert(index(mid - 1) <= key)
+    } else {
+      if (mid > 0) assert(index(mid) <= key)
+      if (mid < end - 1) assert(index(mid + 1) >= key)
+    }
+    mid
   }
 }
