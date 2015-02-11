@@ -317,7 +317,7 @@ object LDA {
                 currentTopic, numTokens, numTerms, alpha, alphaAS, beta)
               val (wSum, w) = wordTable(wordTableCache, totalTopicCounter,
                 termTopicCounter, termId, numTokens, numTerms, alpha, alphaAS, beta)
-              val newTopic = tokenSampling(gen, t, tSum, w, wSum, d)
+              val newTopic = tokenSampling(gen, t, tSum, w, termTopicCounter, wSum, d, currentTopic)
 
               if (newTopic != currentTopic) {
                 topics(i) = newTopic
@@ -435,8 +435,10 @@ object LDA {
     t: Table,
     tSum: Double,
     w: Table,
+    termTopicCounter: VD,
     wSum: Double,
-    d: BSV[Double]): Int = {
+    d: BSV[Double],
+    currentTopic: Int): Int = {
     val index = d.index
     val data = d.data
     val used = d.used
@@ -451,7 +453,7 @@ object LDA {
       val pos = binarySearchInterval(data, dGenSum, 0, used, true)
       index(pos)
     } else if (genSum < (dSum + wSum)) {
-      sampleAlias(gen, w)
+      sampleSV(gen, w, termTopicCounter, currentTopic)
     } else {
       sampleAlias(gen, t)
     }
@@ -570,6 +572,22 @@ object LDA {
       cacheMap.update(termId, w)
     }
     w.get()
+  }
+
+  private def sampleSV(gen: Random, table: Table, sv: VD, currentTopic: Int): Int = {
+    val docTopic = sampleAlias(gen, table)
+    if (docTopic == currentTopic) {
+      val svCounter = sv(currentTopic)
+      // 这里的处理方法不太对.
+      // 如果采样到当前token的Topic这丢弃掉
+      // svCounter == 1 && table.length > 1 采样到token的Topic 但包含其他token
+      // svCounter > 1 && gen.nextDouble() < 1.0 / svCounter 采样的Topic 有1/svCounter 概率属于当前token
+      if ((svCounter == 1 && table.length > 1) ||
+        (svCounter > 1 && gen.nextDouble() < 1.0 / svCounter)) {
+        return sampleSV(gen, table, sv, currentTopic)
+      }
+    }
+    docTopic
   }
 
 }
