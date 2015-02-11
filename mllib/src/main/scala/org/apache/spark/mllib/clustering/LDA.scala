@@ -301,9 +301,9 @@ object LDA {
       (pid, iter) => {
         val gen = new XORShiftRandom(parts * innerIter + pid)
         val wordTableCache = new AppendOnlyMap[VertexId, SoftReference[(Double, Table)]]()
-        var t: Table = null
-        var tSum: Double = 0.0
-
+        val dv = tDense(totalTopicCounter, numTokens, numTerms, alpha, alphaAS, beta)
+        val t = generateAlias(dv._2, dv._1)
+        val tSum = dv._1
         iter.map {
           triplet =>
             val termId = triplet.srcId
@@ -313,44 +313,15 @@ object LDA {
             val topics = triplet.attr
             for (i <- 0 until topics.length) {
               val currentTopic = topics(i)
-              if (t == null || gen.nextDouble() < 1e-6) {
-                val dv = tDense(totalTopicCounter, numTokens, numTerms, alpha, alphaAS, beta)
-                t = generateAlias(dv._2, dv._1)
-                tSum = dv._1
-              }
-
-              val d = docTopicCounter.synchronized {
-                termTopicCounter.synchronized {
-                  dSparse(totalTopicCounter, termTopicCounter, docTopicCounter,
-                    currentTopic, numTokens, numTerms, alpha, alphaAS, beta)
-                }
-              }
-              val (wSum, w) = termTopicCounter.synchronized {
-                wordTable(gen, wordTableCache, totalTopicCounter,
-                  termTopicCounter, termId, numTokens, numTerms, alpha, alphaAS, beta)
-              }
-              val newTopic = docTopicCounter.synchronized {
-                termTopicCounter.synchronized {
-                  tokenSampling(gen, t, tSum, w, wSum, d)
-                }
-              }
+              val d = dSparse(totalTopicCounter, termTopicCounter, docTopicCounter,
+                currentTopic, numTokens, numTerms, alpha, alphaAS, beta)
+              val (wSum, w) = wordTable(wordTableCache, totalTopicCounter,
+                termTopicCounter, termId, numTokens, numTerms, alpha, alphaAS, beta)
+              val newTopic = tokenSampling(gen, t, tSum, w, wSum, d)
 
               if (newTopic != currentTopic) {
-                docTopicCounter.synchronized {
-                  docTopicCounter(currentTopic) -= 1
-                  docTopicCounter(newTopic) += 1
-                }
-                termTopicCounter.synchronized {
-                  termTopicCounter(currentTopic) -= 1
-                  termTopicCounter(newTopic) += 1
-                }
-
-                totalTopicCounter(currentTopic) -= 1
-                totalTopicCounter(newTopic) += 1
-
                 topics(i) = newTopic
               }
-
             }
 
             topics
@@ -397,7 +368,8 @@ object LDA {
     var corpus: Graph[VD, ED] = Graph.fromEdges(edges, null, storageLevel, storageLevel)
     corpus = updateCounter(corpus, numTopics).cache()
     corpus.vertices.count()
-    corpus.partitionBy(PartitionStrategy.EdgePartition1D)
+    // corpus.partitionBy(PartitionStrategy.EdgePartition1D)
+    corpus
   }
 
   private def initializeEdges(
@@ -440,13 +412,22 @@ object LDA {
    * 每次采样的复杂度为: O(1)
    * 使用 Gibbs sampler 采样论文 Rethinking LDA: Why Priors Matter 公式(3)
    * \frac{{n}_{kw}^{-di}+{\beta }_{w}}{{n}_{k}^{-di}+\bar{\beta}} \frac{{n}_{kd} ^{-di}+ \bar{\alpha} \frac{{n}_{k}^{-di} + \acute{\alpha}}{\sum{n}_{k} +\bar{\acute{\alpha}}}}{\sum{n}_{kd}^{-di} +\bar{\alpha}}
+   * = t + w + d
+   * t 全局相关部分
+   * t = \frac{{\beta }_{w} \bar{\alpha} ( {n}_{k}^{-di} + \acute{\alpha} ) } {({n}_{k}^{-di}+\bar{\beta}) ({\sum{n}_{k}^{-di} +\bar{\acute{\alpha}}})}
+   * w 词相关部分
+   * w = \frac{ {n}_{kw}^{-di} \bar{\alpha} ( {n}_{k}^{-di} + \acute{\alpha} )}{({n}_{k}^{-di}+\bar{\beta})({\sum{n}_{k}^{-di} +\bar{\acute{\alpha}}})}
+   * d 文档和词的乘积
+   * d =  \frac{{n}_{kd}^{-di}({\sum{n}_{k}^{-di} + \bar{\acute{\alpha}}})({n}_{kw}^{-di}+{\beta}_{w})}{({n}_{k}^{-di}+\bar{\beta})({\sum{n}_{k}^{-di} +\bar{\acute{\alpha}}})}
+   * =  \frac{{n}_{kd ^{-di}({n}_{kw}^{-di}+{\beta}_{w})}{({n}_{k}^{-di}+\bar{\beta}) }
    * 其中
    * \bar{\beta}=\sum_{w}{\beta}_{w}
    * \bar{\alpha}=\sum_{k}{\alpha}_{k}
    * \bar{\acute{\alpha}}=\bar{\acute{\alpha}}=\sum_{k}\acute{\alpha}
-   * {n}_{kd} 是文档d中主题为k的tokens数
+   * {n}_{kd} 文档d中主题为k的tokens数
    * {n}_{kw} 词中主题为k的tokens数
-   * {n}_{k} 是语料库中主题为k的tokens数
+   * {n}_{k} 语料库中主题为k的tokens数
+   * -di 减去当前token的主题
    */
   // scalastyle:on
   def tokenSampling(
@@ -461,6 +442,9 @@ object LDA {
     val used = d.used
     val dSum = data(d.used - 1)
     val distSum = tSum + wSum + dSum
+    if (gen.nextDouble() < 1e-32) {
+      println(s"dSum: ${dSum / distSum}")
+    }
     val genSum = gen.nextDouble() * distSum
     if (genSum < dSum) {
       val dGenSum = gen.nextDouble() * dSum
@@ -474,6 +458,10 @@ object LDA {
   }
 
 
+  /**
+   * 分解后的公式为
+   * t = \frac{{\beta }_{w} \bar{\alpha} ( {n}_{k}^{-di} + \acute{\alpha} ) } {({n}_{k}^{-di}+\bar{\beta}) ({\sum{n}_{k}^{-di} +\bar{\acute{\alpha}}})}
+   */
   private def tDense(
     totalTopicCounter: BDV[Count],
     numTokens: Double,
@@ -496,6 +484,10 @@ object LDA {
     (sum, t)
   }
 
+  /**
+   * 分解后的公式为
+   * w = \frac{ {n}_{kw}^{-di} \bar{\alpha} ( {n}_{k}^{-di} + \acute{\alpha} )}{({n}_{k}^{-di}+\bar{\beta}) ({\sum{n}_{k}^{-di} +\bar{\acute{\alpha}}})}
+   */
   private def wSparse(
     totalTopicCounter: BDV[Count],
     termTopicCounter: VD,
@@ -521,6 +513,11 @@ object LDA {
     (sum, w)
   }
 
+  /**
+   * 分解后的公式为
+   * d =  \frac{{n}_{kd} ^{-di}({\sum{n}_{k}^{-di} + \bar{\acute{\alpha}}})({n}_{kw}^{-di}+{\beta}_{w})}{({n}_{k}^{-di}+\bar{\beta})({\sum{n}_{k}^{-di} +\bar{\acute{\alpha}}})}
+   * =  \frac{{n}_{kd} ^{-di}({n}_{kw}^{-di}+{\beta}_{w})}{({n}_{k}^{-di}+\bar{\beta}) }
+   */
   private def dSparse(
     totalTopicCounter: BDV[Count],
     termTopicCounter: VD,
@@ -532,25 +529,30 @@ object LDA {
     alphaAS: Double,
     beta: Double): BSV[Double] = {
     val numTopics = totalTopicCounter.length
+    val index = docTopicCounter.index
+    val data = docTopicCounter.data
+    val used = docTopicCounter.used
+
     // val termSum = numTokens - 1D + alphaAS * numTopics
     val betaSum = numTerms * beta
-    val d = BSV.zeros[Double](numTopics)
+    val d = new Array[Double](used)
     var sum = 0.0
-    docTopicCounter.activeIterator.foreach { t =>
-      val topic = t._1
-      val count = if (currentTopic == topic && t._2 != 1) t._2 - 1 else t._2
+    for (i <- 0 until used) {
+      val topic = index(i)
+      var count: Double = data(i)
+      if (currentTopic == topic) count = count - 1.0
       // val last = count * termSum * (termTopicCounter(topic) + beta) /
       //  ((totalTopicCounter(topic) + betaSum) * termSum)
       val last = count * (termTopicCounter(topic) + beta) /
         (totalTopicCounter(topic) + betaSum)
+
       sum += last
-      d(topic) = sum
+      d(i) = sum
     }
-    d
+    new BSV[Double](index, d, used, numTopics)
   }
 
   private def wordTable(
-    gen: Random,
     cacheMap: AppendOnlyMap[VertexId, SoftReference[(Double, Table)]],
     totalTopicCounter: BDV[Count],
     termTopicCounter: VD,
@@ -561,13 +563,11 @@ object LDA {
     alphaAS: Double,
     beta: Double): (Double, Table) = {
     var w = cacheMap(termId)
-    if (w == null || w.get() == null || gen.nextDouble() < 1e-5) {
-      termTopicCounter.synchronized {
-        val t = wSparse(totalTopicCounter, termTopicCounter,
-          numTokens, numTerms, alpha, alphaAS, beta)
-        w = new SoftReference((t._1, generateAlias(t._2, t._1)))
-        cacheMap.update(termId, w)
-      }
+    if (w == null || w.get() == null) {
+      val t = wSparse(totalTopicCounter, termTopicCounter,
+        numTokens, numTerms, alpha, alphaAS, beta)
+      w = new SoftReference((t._1, generateAlias(t._2, t._1)))
+      cacheMap.update(termId, w)
     }
     w.get()
   }
