@@ -390,15 +390,14 @@ object LDA {
       if (computedModel != null) model = computedModel.value
       iter.flatMap {
         case (docId, doc) =>
-          initializeEdges(gen, new BSV[Int](doc.indices, doc.values.map(_.toInt), doc.size),
-            docId, numTopics, model)
+          val bsv = new BSV[Int](doc.indices, doc.values.map(_.toInt), doc.size)
+          initializeEdges(gen, bsv, docId, numTopics, model)
       }
     })
     var corpus: Graph[VD, ED] = Graph.fromEdges(edges, null, storageLevel, storageLevel)
-    corpus.partitionBy(PartitionStrategy.EdgePartition1D)
     corpus = updateCounter(corpus, numTopics).cache()
     corpus.vertices.count()
-    corpus
+    corpus.partitionBy(PartitionStrategy.EdgePartition1D)
   }
 
   private def initializeEdges(
