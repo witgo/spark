@@ -18,10 +18,7 @@
 package org.apache.spark.mllib.clustering
 
 import java.lang.ref.SoftReference
-import java.util.{PriorityQueue => JPriorityQueue}
 import java.util.Random
-
-import scala.collection.mutable
 
 import breeze.collection.mutable.OpenAddressHashArray
 import breeze.linalg.{Vector => BV, DenseVector => BDV, HashVector => BHV,
@@ -38,7 +35,6 @@ import org.apache.spark.storage.StorageLevel
 import org.apache.spark.SparkContext._
 import org.apache.spark.util.collection.AppendOnlyMap
 import org.apache.spark.util.random.XORShiftRandom
-import org.apache.spark.util.Utils
 
 import LDA._
 import LDAUtils._
@@ -329,7 +325,7 @@ object LDA {
             val docTopicCounter = triplet.dstAttr
             val topics = triplet.attr
 
-            if (dD == null || gen.nextDouble() < 1e-3) {
+            if (dD == null || gen.nextDouble() < 1e-6) {
               var dv = dDense(totalTopicCounter, alpha, alphaAS, numTokens)
               dDSum = dv._1
               dD = generateAlias(dv._2, dDSum)
@@ -340,22 +336,22 @@ object LDA {
             }
             val (dSum, d) = docTopicCounter.synchronized {
               docTable(x => {
-                x == null || x.get() == null || gen.nextDouble() < 1e-1
+                x == null || x.get() == null || gen.nextDouble() < 1e-6
               }, docTableCache, docTopicCounter, docId)
             }
             val (wSum, w) = termTopicCounter.synchronized {
               wordTable(x => {
-                x == null || x.get() == null || gen.nextDouble() < 1e-2
+                x == null || x.get() == null || gen.nextDouble() < 1e-6
               }, wordTableCache, totalTopicCounter,
                 termTopicCounter, termId, numTerms, beta)
             }
 
-            var docProposal = gen.nextDouble() < 0.5
-            var maxSampling = 8
-            while (maxSampling > 0) {
-              maxSampling -= 1
-              docProposal = !docProposal
-              for (i <- 0 until topics.length) {
+            for (i <- 0 until topics.length) {
+              var docProposal = gen.nextDouble() < 0.5
+              var maxSampling = 8
+              while (maxSampling > 0) {
+                maxSampling -= 1
+                docProposal = !docProposal
                 val currentTopic = topics(i)
                 var proposalTopic = -1
                 val q = if (docProposal) {
@@ -381,6 +377,7 @@ object LDA {
                   }
                 }
 
+                assert(newTopic >= 0 && newTopic < numTopics)
                 if (newTopic != currentTopic) {
                   docTopicCounter.synchronized {
                     docTopicCounter(currentTopic) -= 1
@@ -441,12 +438,12 @@ object LDA {
       if (computedModel != null) model = computedModel.value
       iter.flatMap {
         case (docId, doc) =>
-          initializeEdges(gen, new BSV[Int](doc.indices, doc.values.map(_.toInt), doc.size),
-            docId, numTopics, model)
+          val bsv = new BSV[Int](doc.indices, doc.values.map(_.toInt), doc.size)
+          initializeEdges(gen, bsv, docId, numTopics, model)
       }
     })
     var corpus: Graph[VD, ED] = Graph.fromEdges(edges, null, storageLevel, storageLevel)
-    corpus.partitionBy(PartitionStrategy.EdgePartition1D)
+    corpus = corpus.partitionBy(PartitionStrategy.EdgePartition1D)
     corpus = updateCounter(corpus, numTopics).cache()
     corpus.vertices.count()
     corpus
@@ -512,14 +509,14 @@ object LDA {
     docProposal: Boolean,
     currentTopic: Int,
     proposalTopic: Int,
-    q: (VD, Int) => Double,
+    q: (VD, Int, Boolean) => Double,
     p: (VD, VD, Int, Boolean) => Double): Int = {
     if (proposalTopic == currentTopic) return proposalTopic
     val cp = p(docTopicCounter, termTopicCounter, currentTopic, true)
     val np = p(docTopicCounter, termTopicCounter, proposalTopic, false)
     val vd = if (docProposal) docTopicCounter else termTopicCounter
-    val cq = q(vd, currentTopic)
-    val nq = q(vd, proposalTopic)
+    val cq = q(vd, currentTopic, true)
+    val nq = q(vd, proposalTopic, false)
 
     val pi = (np * cq) / (cp * nq)
     if (gen.nextDouble() < 1e-32) {
@@ -562,7 +559,7 @@ object LDA {
   private def wordProb(
     totalTopicCounter: BDV[Count],
     numTerms: Double,
-    beta: Double)(termTopicCounter: VD, topic: Int): Double = {
+    beta: Double)(termTopicCounter: VD, topic: Int, isAdjustment: Boolean): Double = {
     (termTopicCounter(topic) + beta) / (totalTopicCounter(topic) + beta * numTerms)
   }
 
@@ -570,12 +567,13 @@ object LDA {
     totalTopicCounter: BDV[Count],
     alpha: Double,
     alphaAS: Double,
-    numTokens: Double)(docTopicCounter: VD, topic: Int): Double = {
+    numTokens: Double)(docTopicCounter: VD, topic: Int, isAdjustment: Boolean): Double = {
+    val adjustment = if (isAdjustment) -1.0 else 0.0
     val numTopics = totalTopicCounter.length
     val ratio = (totalTopicCounter(topic) + alphaAS) /
       (numTokens - 1 + alphaAS * numTopics)
     val asPrior = ratio * (alpha * numTopics)
-    docTopicCounter(topic) + asPrior
+    docTopicCounter(topic) + adjustment + asPrior
   }
 
   /**
