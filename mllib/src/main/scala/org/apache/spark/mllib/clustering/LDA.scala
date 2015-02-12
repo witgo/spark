@@ -366,9 +366,9 @@ object LDA {
       }
     })
     var corpus: Graph[VD, ED] = Graph.fromEdges(edges, null, storageLevel, storageLevel)
+    corpus = corpus.partitionBy(PartitionStrategy.EdgePartition1D)
     corpus = updateCounter(corpus, numTopics).cache()
     corpus.vertices.count()
-    // corpus.partitionBy(PartitionStrategy.EdgePartition1D)
     corpus
   }
 
