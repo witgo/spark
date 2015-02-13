@@ -243,6 +243,7 @@ class LDAModel private[mllib](
     alpha: Double,
     alphaAS: Double,
     beta: Double): (Double, Table) = {
+    if (termTopicCounter.used == 0) return (0.0, null)
     var w = cacheMap(termId)
     if (w == null || w.get() == null) {
       val t = wSparse(totalTopicCounter, termTopicCounter,
