@@ -339,7 +339,9 @@ object LDA {
       }
       ctx.sendToDst(vector)
       ctx.sendToSrc(vector)
-    }, _ + _, TripletFields.EdgeOnly)
+    }, _ + _, TripletFields.EdgeOnly).mapValues(t => {
+      t.compact(); t
+    })
     graph.joinVertices(newCounter)((_, _, nc) => nc)
   }
 
@@ -365,10 +367,13 @@ object LDA {
           initializeEdges(gen, bsv, docId, numTopics, model)
       }
     })
+    edges.persist(storageLevel)
     var corpus: Graph[VD, ED] = Graph.fromEdges(edges, null, storageLevel, storageLevel)
     corpus = corpus.partitionBy(PartitionStrategy.EdgePartition1D)
     corpus = updateCounter(corpus, numTopics).cache()
     corpus.vertices.count()
+    corpus.edges.count()
+    edges.unpersist()
     corpus
   }
 
@@ -380,12 +385,13 @@ object LDA {
     computedModel: LDAModel = null): Array[Edge[ED]] = {
     assert(docId >= 0)
     val newDocId: DocId = -(docId + 1L)
-    if (computedModel == null) {
-      doc.activeIterator.map { case (termId, counter) =>
-        val ev = (0 until counter).map { i =>
-          gen.nextInt(numTopics)
-        }.toArray
-        Edge(termId, newDocId, ev)
+    val edges = if (computedModel == null) {
+      doc.activeIterator.filter(_._2 > 0).map { case (termId, counter) =>
+        val topics = new Array[Int](counter)
+        for (i <- 0 until counter) {
+          topics(i) = gen.nextInt(numTopics)
+        }
+        Edge(termId, newDocId, topics)
       }.toArray
     }
     else {
@@ -397,13 +403,15 @@ object LDA {
         docTopicCounter = computedModel.sampleTokens(docTopicCounter,
           tokens, topics)
       }
-      doc.activeIterator.map { case (term, counter) =>
+      doc.activeIterator.filter(_._2 > 0).map { case (term, counter) =>
         val ev = topics.zipWithIndex.filter { case (topic, offset) =>
           term == tokens(offset)
         }.map(_._1)
         Edge(term, newDocId, ev)
       }.toArray
     }
+    assert(edges.length > 0)
+    edges
   }
 
   // scalastyle:off
