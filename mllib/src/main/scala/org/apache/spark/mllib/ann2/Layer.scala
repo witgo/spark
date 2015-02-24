@@ -1,3 +1,20 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
+ *
+ *    http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 package org.apache.spark.mllib.ann2
 
 import breeze.linalg.{DenseMatrix => BDM, DenseVector => BDV, *}
@@ -50,7 +67,8 @@ object AffineLayerModel {
     new AffineLayerModel(w, b)
   }
 
-  def unroll(weights: Vector, position: Int, numIn: Int, numOut: Int): (BDM[Double], BDV[Double]) = {
+  def unroll(weights: Vector, position: Int,
+             numIn: Int, numOut: Int): (BDM[Double], BDV[Double]) = {
     val weightsCopy = weights.toArray
     val w = new BDM[Double](numOut, numIn, weightsCopy, position)
     val b = new BDV[Double](weightsCopy, position + (numOut * numIn), 1, numOut)
@@ -86,12 +104,15 @@ class FunctionalLayer (activationFunction: BDM[Double] => BDM[Double],
 }
 
 class FunctionalLayerModel private (activationFunction: BDM[Double] => BDM[Double],
-                                    activationDerivative: BDM[Double] => BDM[Double]) extends LayerModel {
+                                    activationDerivative: BDM[Double] => BDM[Double]
+                                     ) extends LayerModel {
   override def eval(data: BDM[Double]): BDM[Double] = activationFunction(data)
 
-  override def prevDelta(delta: BDM[Double], input: BDM[Double]): BDM[Double] = delta :* activationDerivative(input)
+  override def prevDelta(delta: BDM[Double], input: BDM[Double]): BDM[Double] =
+    delta :* activationDerivative(input)
 
-  override def grad(delta: BDM[Double], input: BDM[Double]): Vector = Vectors.dense(new Array[Double](0))
+  override def grad(delta: BDM[Double], input: BDM[Double]): Vector =
+    Vectors.dense(new Array[Double](0))
 }
 
 object FunctionalLayerModel {
