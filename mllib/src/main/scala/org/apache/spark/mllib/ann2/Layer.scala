@@ -17,10 +17,13 @@
 
 package org.apache.spark.mllib.ann2
 
-import breeze.linalg.{DenseMatrix => BDM, DenseVector => BDV, *, sum => Bsum}
+import breeze.linalg.
+{DenseMatrix => BDM, Vector => BV, DenseVector => BDV, sum => Bsum, axpy => brzAxpy, *}
 import breeze.numerics.{sigmoid => Bsigmoid}
 
 import org.apache.spark.mllib.linalg.{Vector, Vectors}
+import org.apache.spark.mllib.optimization.{Updater, LBFGS, Gradient}
+import org.apache.spark.rdd.RDD
 import org.apache.spark.util.random.XORShiftRandom
 
 trait Layer {
@@ -141,27 +144,40 @@ class FeedForwardModel(val layerModels: Array[LayerModel]) {
     outputs
   }
 
-  def computeGradient(data: BDM[Double], target: BDM[Double], cumGradient: Vector): Double = {
+  def computeGradient(data: BDM[Double], target: BDM[Double], cumGradient: Vector,
+                      realBatchSize: Int): Double = {
     val outputs = forward(data)
     val deltas = new Array[BDM[Double]](layerModels.length)
     val error = target - outputs.last
     val L = layerModels.length - 1
     // if last two layers form an affine + function layer == sigmoid or softmax
-    if(layerModels(L).size == 0 && layerModels(L - 1).size > 0) {
+    if (layerModels(L).size == 0 && layerModels(L - 1).size > 0) {
       deltas(L) = error
       deltas(L - 1) = layerModels(L).delta(error, outputs(L - 1))
     } else {
       assert(false)
     }
-    for(i <- (L - 2) to (0, -1)) {
+    for (i <- (L - 2) to (0, -1)) {
       deltas(i) = layerModels(i).delta(deltas(i + 1), outputs(i))
     }
     val grads = new Array[Vector](layerModels.length)
-    for(i <- 0 until layerModels.length) {
+    for (i <- 0 until layerModels.length) {
       val input = if (i==0) data else outputs(i)
       grads(i) = layerModels(i).grad(deltas(i), input)
     }
-    // TODO: update cumGradient with all grads
+    // update cumGradient
+    val cumGradientArray = cumGradient.toArray
+    var offset = 0
+    for (i <- 0 until grads.length) {
+      val gradArray = grads(i).toArray
+      var k = 0
+      while (k < gradArray.length) {
+        cumGradientArray(offset + k) += gradArray(k)
+        k += 1
+      }
+      offset += gradArray.length
+    }
+
     // TODO: take batchSize into account
     val outerError = Bsum(error :* error) / 2
     /* NB! dividing by the number of instances in
@@ -184,3 +200,109 @@ object FeedForwardModel {
   }
 
 }
+
+class ANNGradient(topology: Topology, dataStacker: DataStacker) extends Gradient {
+
+  override def compute(data: Vector, label: Double, weights: Vector): (Vector, Double) = {
+    val gradient = Vectors.zeros(weights.size)
+    val loss = compute(data, label, weights, gradient)
+    (gradient, loss)
+  }
+
+  override def compute(data: Vector, label: Double, weights: Vector,
+                       cumGradient: Vector): Double = {
+    val (input, target, realBatchSize) = dataStacker.unstack(data)
+    val model = FeedForwardModel(topology, weights)
+    model.computeGradient(input, target, cumGradient, realBatchSize)
+  }
+}
+
+class DataStacker(batchSize: Int, inputSize: Int, outputSize: Int) {
+  def stack(data: RDD[(Vector, Vector)]): RDD[(Double, Vector)] = {
+    val stackedData = if (batchSize == 1) {
+      data.map(v =>
+        (0.0,
+          Vectors.fromBreeze(BDV.vertcat(
+            v._1.toBreeze.toDenseVector,
+            v._2.toBreeze.toDenseVector))
+          ))
+    } else {
+      data.mapPartitions { it =>
+        it.grouped(batchSize).map { seq =>
+          val size = seq.size
+          val bigVector = new Array[Double](inputSize * size + outputSize * size)
+          var i = 0
+          seq.foreach { case (in, out) =>
+            System.arraycopy(in.toArray, 0, bigVector, i * inputSize, inputSize)
+            System.arraycopy(out.toArray, 0, bigVector,
+              inputSize * size + i * outputSize, outputSize)
+            i += 1
+          }
+          (0.0, Vectors.dense(bigVector))
+        }
+      }
+    }
+    stackedData
+  }
+
+  def unstack(data: Vector): (BDM[Double], BDM[Double], Int) = {
+    val arrData = data.toArray
+    val realBatchSize = arrData.length / (inputSize + outputSize)
+    val input = new BDM(inputSize, realBatchSize, arrData)
+    val target = new BDM(outputSize, realBatchSize, arrData, inputSize * realBatchSize)
+    (input, target, realBatchSize)
+  }
+}
+
+private class ANNUpdater extends Updater {
+
+  override def compute(weightsOld: Vector,
+                       gradient: Vector,
+                       stepSize: Double,
+                       iter: Int,
+                       regParam: Double): (Vector, Double) = {
+    val thisIterStepSize = stepSize
+    val brzWeights: BV[Double] = weightsOld.toBreeze.toDenseVector
+    brzAxpy(-thisIterStepSize, gradient.toBreeze, brzWeights)
+    (Vectors.fromBreeze(brzWeights), 0)
+  }
+}
+/* MLlib-style trainer class that trains a network given the data and topology
+* */
+class FeedForwardNetwork private[mllib](topology: Topology, maxNumIterations: Int,
+                                        convergenceTol: Double, inputSize: Int, outputSize: Int,
+                                        batchSize: Int = 1) extends Serializable {
+
+  private val dataStacker = new DataStacker(batchSize, inputSize, outputSize)
+  private val gradient =
+    new ANNGradient(topology, dataStacker)
+  private val updater = new ANNUpdater()
+  private val optimizer = new LBFGS(gradient, updater).
+    setConvergenceTol(convergenceTol).setNumIterations(maxNumIterations)
+
+  private def run(data: RDD[(Vector, Vector)],
+                  initialWeights: Vector): FeedForwardModel = {
+
+    val weights = optimizer.optimize(dataStacker.stack(data), initialWeights)
+    FeedForwardModel(topology, weights)
+  }
+}
+
+/* MLlib-style object for the collection of train methods
+ *
+ */
+object FeedForwardNetwork {
+
+  def train(trainingRDD: RDD[(Vector, Vector)],
+            batchSize: Int,
+            maxIterations: Int,
+            topology: Topology,
+            initialWeights: Vector) = {
+    val dataSample = trainingRDD.first()
+    val inputSize = dataSample._1.size
+    val outputSize = dataSample._2.size
+    new FeedForwardNetwork(topology, maxIterations, 1e-4, batchSize, inputSize, outputSize).
+      run(trainingRDD, initialWeights)
+  }
+}
+
