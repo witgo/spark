@@ -17,7 +17,7 @@
 
 package org.apache.spark.mllib.ann2
 
-import breeze.linalg.{DenseMatrix => BDM, DenseVector => BDV, *}
+import breeze.linalg.{DenseMatrix => BDM, DenseVector => BDV, *, sum => Bsum}
 import breeze.numerics.{sigmoid => Bsigmoid}
 
 import org.apache.spark.mllib.linalg.{Vector, Vectors}
@@ -29,8 +29,9 @@ trait Layer {
 }
 
 trait LayerModel {
+  val size: Int
   def eval(data: BDM[Double]): BDM[Double]
-  def prevDelta(delta: BDM[Double], input: BDM[Double]): BDM[Double]
+  def delta(nextDelta: BDM[Double], input: BDM[Double]): BDM[Double]
   def grad(delta: BDM[Double], input: BDM[Double]): Vector
 }
 
@@ -47,13 +48,15 @@ class AffineLayer(numIn: Int, numOut: Int) extends Layer {
 }
 
 class AffineLayerModel private(w: BDM[Double], b: BDV[Double]) extends LayerModel {
+  val size = w.size + b.length
+
   override def eval(data: BDM[Double]): BDM[Double] = {
     val output = w * data
     output(::, *) :+= b
     output
   }
 
-  override def prevDelta(delta: BDM[Double], input: BDM[Double]): BDM[Double] = w.t * delta
+  override def delta(nextDelta: BDM[Double], input: BDM[Double]): BDM[Double] = w.t * nextDelta
 
   override def grad(delta: BDM[Double], input: BDM[Double]): Vector = {
     val g = delta * input.t
@@ -106,10 +109,12 @@ class FunctionalLayer (activationFunction: BDM[Double] => BDM[Double],
 class FunctionalLayerModel private (activationFunction: BDM[Double] => BDM[Double],
                                     activationDerivative: BDM[Double] => BDM[Double]
                                      ) extends LayerModel {
+  val size = 0
+
   override def eval(data: BDM[Double]): BDM[Double] = activationFunction(data)
 
-  override def prevDelta(delta: BDM[Double], input: BDM[Double]): BDM[Double] =
-    delta :* activationDerivative(input)
+  override def delta(nextDelta: BDM[Double], input: BDM[Double]): BDM[Double] =
+    nextDelta :* activationDerivative(input)
 
   override def grad(delta: BDM[Double], input: BDM[Double]): Vector =
     Vectors.dense(new Array[Double](0))
@@ -120,4 +125,62 @@ object FunctionalLayerModel {
             activationDerivative: BDM[Double] => BDM[Double]): FunctionalLayerModel = {
     new FunctionalLayerModel(activationFunction, activationDerivative)
   }
+}
+
+class Topology(val layers: Array[Layer]) {
+
+}
+
+class FeedForwardModel(val layerModels: Array[LayerModel]) {
+  def forward(data: BDM[Double]): Array[BDM[Double]] = {
+    val outputs = new Array[BDM[Double]](layerModels.length)
+    outputs(0) = layerModels(0).eval(data)
+    for(i <- 1 until layerModels.length){
+      outputs(i) = layerModels(i).eval(outputs(i-1))
+    }
+    outputs
+  }
+
+  def computeGradient(data: BDM[Double], target: BDM[Double], cumGradient: Vector): Double = {
+    val outputs = forward(data)
+    val deltas = new Array[BDM[Double]](layerModels.length)
+    val error = target - outputs.last
+    val L = layerModels.length - 1
+    // if last two layers form an affine + function layer == sigmoid or softmax
+    if(layerModels(L).size == 0 && layerModels(L - 1).size > 0) {
+      deltas(L) = error
+      deltas(L - 1) = layerModels(L).delta(error, outputs(L - 1))
+    } else {
+      assert(false)
+    }
+    for(i <- (L - 2) to (0, -1)) {
+      deltas(i) = layerModels(i).delta(deltas(i + 1), outputs(i))
+    }
+    val grads = new Array[Vector](layerModels.length)
+    for(i <- 0 until layerModels.length) {
+      val input = if (i==0) data else outputs(i)
+      grads(i) = layerModels(i).grad(deltas(i), input)
+    }
+    // TODO: update cumGradient with all grads
+    // TODO: take batchSize into account
+    val outerError = Bsum(error :* error) / 2
+    /* NB! dividing by the number of instances in
+     * the batch to be transparent for the optimizer */
+    outerError
+  }
+
+}
+
+object FeedForwardModel {
+  def apply(topology: Topology, weights: Vector): FeedForwardModel = {
+    val layers = topology.layers
+    val layerModels = new Array[LayerModel](layers.length)
+    var offset = 0
+    for(i <- 0 until layers.length){
+      layerModels(i) = layers(i).getInstance(weights, offset)
+      offset += layerModels(i).size
+    }
+    new FeedForwardModel(layerModels)
+  }
+
 }
