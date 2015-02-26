@@ -34,7 +34,7 @@ trait Layer extends Serializable {
 trait LayerModel extends Serializable {
   val size: Int
   def eval(data: BDM[Double]): BDM[Double]
-  def delta(nextDelta: BDM[Double], input: BDM[Double]): BDM[Double]
+  def prevDelta(nextDelta: BDM[Double], input: BDM[Double]): BDM[Double]
   def grad(delta: BDM[Double], input: BDM[Double]): Vector
   def weights(): Vector
 }
@@ -60,7 +60,7 @@ class AffineLayerModel private(w: BDM[Double], b: BDV[Double]) extends LayerMode
     output
   }
 
-  override def delta(nextDelta: BDM[Double], input: BDM[Double]): BDM[Double] = w.t * nextDelta
+  override def prevDelta(nextDelta: BDM[Double], input: BDM[Double]): BDM[Double] = w.t * nextDelta
 
   override def grad(delta: BDM[Double], input: BDM[Double]): Vector = {
     val g = delta * input.t
@@ -129,7 +129,7 @@ class FunctionalLayerModel private (activationFunction: BDM[Double] => BDM[Doubl
 
   override def eval(data: BDM[Double]): BDM[Double] = activationFunction(data)
 
-  override def delta(nextDelta: BDM[Double], input: BDM[Double]): BDM[Double] =
+  override def prevDelta(nextDelta: BDM[Double], input: BDM[Double]): BDM[Double] =
     nextDelta :* activationDerivative(input)
 
   override def grad(delta: BDM[Double], input: BDM[Double]): Vector =
@@ -180,12 +180,12 @@ class FeedForwardModel(val layerModels: Array[LayerModel]) extends Serializable 
     // if last two layers form an affine + function layer == sigmoid or softmax
     if (layerModels(L).size == 0 && layerModels(L - 1).size > 0) {
       deltas(L) = error
-      deltas(L - 1) = layerModels(L).delta(error, outputs(L - 1))
+      deltas(L - 1) = layerModels(L).prevDelta(error, outputs(L - 1))
     } else {
       assert(false)
     }
     for (i <- (L - 2) to (0, -1)) {
-      deltas(i) = layerModels(i).delta(deltas(i + 1), outputs(i))
+      deltas(i) = layerModels(i + 1).prevDelta(deltas(i + 1), outputs(i))
     }
     val grads = new Array[Vector](layerModels.length)
     for (i <- 0 until layerModels.length) {
