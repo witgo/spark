@@ -21,7 +21,7 @@ import breeze.linalg.{DenseMatrix => BDM, DenseVector => BDV, *, sum => Bsum}
 import breeze.numerics.{sigmoid => Bsigmoid}
 import org.apache.spark.mllib.linalg
 import org.apache.spark.mllib.linalg.{Vectors, Vector}
-import org.apache.spark.mllib.optimization.{LBFGS, Gradient}
+import org.apache.spark.mllib.optimization.{GradientDescent, LBFGS, Gradient}
 import org.apache.spark.rdd.RDD
 import org.apache.spark.util.random.XORShiftRandom
 
@@ -265,6 +265,7 @@ private class BackPropagationGradient(val batchSize: Int,
       avgDeltas(i) = Bsum(deltas(i)(*, ::))
       avgDeltas(i) :/= outputs(i).cols.toDouble
     }
+
     //backTime = System.nanoTime() - backTime
     //var rollTime = System.nanoTime()
     FeedForwardModel.rollWeights(gradientMatrices, avgDeltas, cumGradient)
