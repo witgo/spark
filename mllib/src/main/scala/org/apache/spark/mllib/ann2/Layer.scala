@@ -398,4 +398,3 @@ object FeedForwardNetwork {
       run(trainingRDD, initialWeights)
   }
 }
-
