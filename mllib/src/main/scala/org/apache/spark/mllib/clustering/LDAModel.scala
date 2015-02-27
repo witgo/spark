@@ -21,15 +21,12 @@ import java.lang.ref.SoftReference
 import java.util.Random
 import java.util.{PriorityQueue => JPriorityQueue}
 
-import org.apache.spark.util.random.XORShiftRandom
-
-import scala.reflect.ClassTag
-
 import breeze.linalg.{Vector => BV, DenseVector => BDV, SparseVector => BSV,
 sum => brzSum, norm => brzNorm}
 
 import org.apache.spark.mllib.linalg.{Vectors, DenseVector => SDV, SparseVector => SSV}
 import org.apache.spark.util.collection.AppendOnlyMap
+import org.apache.spark.util.random.XORShiftRandom
 
 import LDAUtils._
 

@@ -340,7 +340,8 @@ object LDA {
       ctx.sendToDst(vector)
       ctx.sendToSrc(vector)
     }, _ + _, TripletFields.EdgeOnly).mapValues(t => {
-      t.compact(); t
+      t.compact()
+      t
     })
     graph.joinVertices(newCounter)((_, _, nc) => nc)
   }
@@ -369,7 +370,7 @@ object LDA {
     })
     edges.persist(storageLevel)
     var corpus: Graph[VD, ED] = Graph.fromEdges(edges, null, storageLevel, storageLevel)
-    corpus = corpus.partitionBy(PartitionStrategy.EdgePartition1D)
+    corpus = corpus.partitionBy(PartitionStrategy.EdgePartition2D)
     corpus = updateCounter(corpus, numTopics).cache()
     corpus.vertices.count()
     corpus.edges.count()
