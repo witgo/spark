@@ -26,11 +26,18 @@ import org.apache.spark.mllib.optimization.{Updater, LBFGS, Gradient}
 import org.apache.spark.rdd.RDD
 import org.apache.spark.util.random.XORShiftRandom
 
+/* Trait that holds Layer properties, that are needed to instantiate it.
+*  Implements Layer instantiation.
+* */
 trait Layer extends Serializable {
   def getInstance(weights: Vector, position: Int): LayerModel
   def getInstance(seed: Long): LayerModel
 }
 
+/* Trait that holds Layer parameters aka weights.
+*  Implements funtions needed for forward propagation, computing delta and gradient.
+*  Can return weights in Vector format.
+* */
 trait LayerModel extends Serializable {
   val size: Int
   def eval(data: BDM[Double]): BDM[Double]
@@ -39,6 +46,8 @@ trait LayerModel extends Serializable {
   def weights(): Vector
 }
 
+/* Layer for affine transformations that is y=Ax+b
+* */
 class AffineLayer(numIn: Int, numOut: Int) extends Layer {
   override def getInstance(weights: Vector, position: Int): LayerModel = {
     val (w, b) = AffineLayerModel.unroll(weights, position, numIn, numOut)
@@ -51,6 +60,8 @@ class AffineLayer(numIn: Int, numOut: Int) extends Layer {
   }
 }
 
+/* Model of affine Layer
+* */
 class AffineLayerModel private(w: BDM[Double], b: BDV[Double]) extends LayerModel {
   val size = w.size + b.length
 
@@ -82,6 +93,7 @@ object AffineLayerModel {
   def unroll(weights: Vector, position: Int,
              numIn: Int, numOut: Int): (BDM[Double], BDV[Double]) = {
     val weightsCopy = weights.toArray
+    // TODO: the array is not copied to BDMs, make sure this is OK!
     val w = new BDM[Double](numOut, numIn, weightsCopy, position)
     val b = new BDV[Double](weightsCopy, position + (numOut * numIn), 1, numOut)
     (w, b)
@@ -89,8 +101,9 @@ object AffineLayerModel {
 
   def roll(w: BDM[Double], b: BDV[Double]): Vector = {
     val result = new Array[Double](w.size + b.length)
-    System.arraycopy(w.data, 0, result, 0, w.size)
-    System.arraycopy(b.data, 0, result, w.size, b.length)
+    // TODO: make sure that we need to copy!
+    System.arraycopy(w.toArray, 0, result, 0, w.size)
+    System.arraycopy(b.toArray, 0, result, w.size, b.length)
     Vectors.dense(result)
   }
 
@@ -102,6 +115,8 @@ object AffineLayerModel {
   }
 }
 
+/* Collection of functions and their derivatives for functional layers
+* */
 object ANNFunctions {
 
   def Sigmoid(data: BDM[Double]): BDM[Double] = Bsigmoid(data)
@@ -114,6 +129,8 @@ object ANNFunctions {
   }
 }
 
+/* Functional layer, that is y = f(x)
+* */
 class FunctionalLayer (activationFunction: BDM[Double] => BDM[Double],
                        activationDerivative: BDM[Double] => BDM[Double]) extends Layer {
   override def getInstance(weights: Vector, position: Int): LayerModel = getInstance(0L)
@@ -122,6 +139,8 @@ class FunctionalLayer (activationFunction: BDM[Double] => BDM[Double],
     FunctionalLayerModel(activationFunction, activationDerivative)
 }
 
+/* Functional layer model. Holds no parameters (weights).
+* */
 class FunctionalLayerModel private (activationFunction: BDM[Double] => BDM[Double],
                                     activationDerivative: BDM[Double] => BDM[Double]
                                      ) extends LayerModel {
@@ -145,10 +164,14 @@ object FunctionalLayerModel {
   }
 }
 
+/* Network topology that holds the array of layers.
+* */
 class Topology(val layers: Array[Layer]) extends Serializable {
 
 }
 
+/* Factory for some of the frequently-used topologies
+* */
 object Topology {
   def multiLayerPerceptron(layerSizes: Array[Int]): Topology = {
     val layers = new Array[Layer]((layerSizes.length - 1) * 2)
@@ -160,6 +183,9 @@ object Topology {
   }
 }
 
+/* Model of Feed Forward Neural Network.
+* Implements forward, gradient computation and can return weights in vector format.
+* */
 class FeedForwardModel(val layerModels: Array[LayerModel]) extends Serializable {
   def forward(data: BDM[Double]): Array[BDM[Double]] = {
     val outputs = new Array[BDM[Double]](layerModels.length)
@@ -174,22 +200,23 @@ class FeedForwardModel(val layerModels: Array[LayerModel]) extends Serializable 
                       realBatchSize: Int): Double = {
     val outputs = forward(data)
     val deltas = new Array[BDM[Double]](layerModels.length)
-    val error = target - outputs.last
+    val error = outputs.last - target
     val L = layerModels.length - 1
-    // TODO: make the following not so ugly
+    // TODO: make the following not so ugly, parametrize error/cost function
     // if last two layers form an affine + function layer == sigmoid or softmax
     if (layerModels(L).size == 0 && layerModels(L - 1).size > 0) {
       deltas(L) = error
-      deltas(L - 1) = layerModels(L).prevDelta(error, outputs(L - 1))
+      deltas(L - 1) = layerModels(L).prevDelta(error, outputs(L))
     } else {
-      assert(false)
+      assert(false, "Network must have Affine+Functional layers on the top. " +
+        "Other cases are not implemented yet.")
     }
     for (i <- (L - 2) to (0, -1)) {
-      deltas(i) = layerModels(i + 1).prevDelta(deltas(i + 1), outputs(i))
+      deltas(i) = layerModels(i + 1).prevDelta(deltas(i + 1), outputs(i + 1))
     }
     val grads = new Array[Vector](layerModels.length)
     for (i <- 0 until layerModels.length) {
-      val input = if (i==0) data else outputs(i)
+      val input = if (i==0) data else outputs(i - 1)
       grads(i) = layerModels(i).grad(deltas(i), input)
     }
     // update cumGradient
@@ -257,9 +284,10 @@ object FeedForwardModel {
     }
     new FeedForwardModel(layerModels)
   }
-
 }
 
+/* Neural network gradient. Does nothing but calling Model's gradient
+* */
 class ANNGradient(topology: Topology, dataStacker: DataStacker) extends Gradient {
 
   override def compute(data: Vector, label: Double, weights: Vector): (Vector, Double) = {
@@ -276,6 +304,10 @@ class ANNGradient(topology: Topology, dataStacker: DataStacker) extends Gradient
   }
 }
 
+/* Class that stacks the training samples in one vector allowing them to pass
+*  through Optimizer/Gradient interfaces and thus allowing batch gradient computation.
+*  Can unstack the training samples into matrices.
+* */
 class DataStacker(batchSize: Int, inputSize: Int, outputSize: Int) extends Serializable {
   def stack(data: RDD[(Vector, Vector)]): RDD[(Double, Vector)] = {
     val stackedData = if (batchSize == 1) {
@@ -313,6 +345,8 @@ class DataStacker(batchSize: Int, inputSize: Int, outputSize: Int) extends Seria
   }
 }
 
+/* Simple updater
+* */
 private class ANNUpdater extends Updater {
 
   override def compute(weightsOld: Vector,

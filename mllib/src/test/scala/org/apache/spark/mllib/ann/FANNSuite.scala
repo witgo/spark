@@ -35,7 +35,7 @@ class FANNSuite extends FunSuite with MLlibTestSparkContext {
     val data = inputs.zip(outputs).map { case (features, label) =>
       (Vectors.dense(features), Vectors.dense(Array(label)))
     }
-    val rddData = sc.parallelize(data, 2)
+    val rddData = sc.parallelize(data, 1)
     val hiddenLayersTopology = Array[Int](5)
     val dataSample = rddData.first()
     val topology = dataSample._1.size +: hiddenLayersTopology :+ dataSample._2.size
