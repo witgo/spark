@@ -24,7 +24,7 @@ import breeze.linalg.{DenseVector => BDV, SparseVector => BSV, sum => brzSum}
 
 import org.apache.spark.broadcast.Broadcast
 import org.apache.spark.graphx._
-import org.apache.spark.Logging
+import org.apache.spark.{HashPartitioner, Logging, Partitioner}
 import org.apache.spark.mllib.linalg.distributed.{MatrixEntry, RowMatrix}
 import org.apache.spark.mllib.linalg.{DenseVector => SDV, SparseVector => SSV, Vector => SV}
 import org.apache.spark.rdd.RDD
@@ -302,6 +302,7 @@ object LDA {
         val gen = new XORShiftRandom(parts * innerIter + pid)
         val wordTableCache = new AppendOnlyMap[VertexId, SoftReference[(Double, Table)]]()
         val dv = tDense(totalTopicCounter, numTokens, numTerms, alpha, alphaAS, beta)
+        val dData = new Array[Double](numTopics.toInt)
         val t = generateAlias(dv._2, dv._1)
         val tSum = dv._1
         iter.map {
@@ -313,11 +314,12 @@ object LDA {
             val topics = triplet.attr
             for (i <- 0 until topics.length) {
               val currentTopic = topics(i)
-              val d = dSparse(totalTopicCounter, termTopicCounter, docTopicCounter,
+              dSparse(totalTopicCounter, termTopicCounter, docTopicCounter, dData,
                 currentTopic, numTokens, numTerms, alpha, alphaAS, beta)
               val (wSum, w) = wordTable(wordTableCache, totalTopicCounter,
                 termTopicCounter, termId, numTokens, numTerms, alpha, alphaAS, beta)
-              val newTopic = tokenSampling(gen, t, tSum, w, termTopicCounter, wSum, d, currentTopic)
+              val newTopic = tokenSampling(gen, t, tSum, w, termTopicCounter, wSum,
+                docTopicCounter, dData, currentTopic)
 
               if (newTopic != currentTopic) {
                 topics(i) = newTopic
@@ -370,7 +372,14 @@ object LDA {
     })
     edges.persist(storageLevel)
     var corpus: Graph[VD, ED] = Graph.fromEdges(edges, null, storageLevel, storageLevel)
-    corpus = corpus.partitionBy(PartitionStrategy.EdgePartition2D)
+    val degrees = corpus.outerJoinVertices(corpus.degrees) { (vid, data, deg) => deg.getOrElse(0)}
+    val numPartitions = edges.partitions.size
+    val partitionStrategy = new DBHPartitioner(numPartitions)
+    val newEdges = degrees.triplets.map { e =>
+      (partitionStrategy.getPartition(e), Edge(e.srcId, e.dstId, e.attr))
+    }.partitionBy(new HashPartitioner(numPartitions)).map(_._2)
+    corpus = Graph.fromEdges(newEdges, null, storageLevel, storageLevel)
+    // corpus = corpus.partitionBy(PartitionStrategy.EdgePartition2D)
     corpus = updateCounter(corpus, numTopics).cache()
     corpus.vertices.count()
     corpus.edges.count()
@@ -446,12 +455,12 @@ object LDA {
     w: Table,
     termTopicCounter: VD,
     wSum: Double,
-    d: BSV[Double],
+    docTopicCounter: VD,
+    dData: Array[Double],
     currentTopic: Int): Int = {
-    val index = d.index
-    val data = d.data
-    val used = d.used
-    val dSum = data(d.used - 1)
+    val index = docTopicCounter.index
+    val used = docTopicCounter.used
+    val dSum = dData(docTopicCounter.used - 1)
     val distSum = tSum + wSum + dSum
     if (gen.nextDouble() < 1e-32) {
       println(s"dSum: ${dSum / distSum}")
@@ -459,7 +468,7 @@ object LDA {
     val genSum = gen.nextDouble() * distSum
     if (genSum < dSum) {
       val dGenSum = gen.nextDouble() * dSum
-      val pos = binarySearchInterval(data, dGenSum, 0, used, true)
+      val pos = binarySearchInterval(dData, dGenSum, 0, used, true)
       index(pos)
     } else if (genSum < (dSum + wSum)) {
       sampleSV(gen, w, termTopicCounter, currentTopic)
@@ -533,20 +542,19 @@ object LDA {
     totalTopicCounter: BDV[Count],
     termTopicCounter: VD,
     docTopicCounter: VD,
+    d: Array[Double],
     currentTopic: Int,
     numTokens: Double,
     numTerms: Double,
     alpha: Double,
     alphaAS: Double,
-    beta: Double): BSV[Double] = {
-    val numTopics = totalTopicCounter.length
+    beta: Double): Unit = {
     val index = docTopicCounter.index
     val data = docTopicCounter.data
     val used = docTopicCounter.used
 
     // val termSum = numTokens - 1D + alphaAS * numTopics
     val betaSum = numTerms * beta
-    val d = new Array[Double](used)
     var sum = 0.0
     for (i <- 0 until used) {
       val topic = index(i)
@@ -560,7 +568,6 @@ object LDA {
       sum += last
       d(i) = sum
     }
-    new BSV[Double](index, d, used, numTopics)
   }
 
   private def wordTable(
@@ -599,6 +606,31 @@ object LDA {
     docTopic
   }
 
+}
+
+private class DBHPartitioner(partitions: Int) extends Partitioner {
+  val mixingPrime: Long = 1125899906842597L
+
+  def numPartitions = partitions
+
+  def getPartition(key: Any): Int = {
+    val edge = key.asInstanceOf[EdgeTriplet[Int, ED]]
+    val idx = math.min(edge.srcAttr, edge.dstAttr)
+    getPartition(idx)
+  }
+
+  def getPartition(src: Int): PartitionID = {
+    (math.abs(src * mixingPrime) % partitions).toInt
+  }
+
+  override def equals(other: Any): Boolean = other match {
+    case h: DBHPartitioner =>
+      h.numPartitions == numPartitions
+    case _ =>
+      false
+  }
+
+  override def hashCode: Int = numPartitions
 }
 
 class LDAKryoRegistrator extends KryoRegistrator {
