@@ -372,14 +372,16 @@ object LDA {
     })
     edges.persist(storageLevel)
     var corpus: Graph[VD, ED] = Graph.fromEdges(edges, null, storageLevel, storageLevel)
-    val degrees = corpus.outerJoinVertices(corpus.degrees) { (vid, data, deg) => deg.getOrElse(0)}
-    val numPartitions = edges.partitions.size
-    val partitionStrategy = new DBHPartitioner(numPartitions)
-    val newEdges = degrees.triplets.map { e =>
-      (partitionStrategy.getPartition(e), Edge(e.srcId, e.dstId, e.attr))
-    }.partitionBy(new HashPartitioner(numPartitions)).map(_._2)
-    corpus = Graph.fromEdges(newEdges, null, storageLevel, storageLevel)
-    // corpus = corpus.partitionBy(PartitionStrategy.EdgePartition2D)
+    // degree-based hashing
+    //  val degrees = corpus.outerJoinVertices(corpus.degrees) { (vid, data, deg) => deg.getOrElse(0)}
+    //  val numPartitions = edges.partitions.size
+    //  val partitionStrategy = new DBHPartitioner(numPartitions)
+    //  val newEdges = degrees.triplets.map { e =>
+    //    (partitionStrategy.getPartition(e), Edge(e.srcId, e.dstId, e.attr))
+    //  }.partitionBy(new HashPartitioner(numPartitions)).map(_._2)
+    //  corpus = Graph.fromEdges(newEdges, null, storageLevel, storageLevel)
+    // end degree-based hashing
+    corpus = corpus.partitionBy(PartitionStrategy.EdgePartition2D)
     corpus = updateCounter(corpus, numTopics).cache()
     corpus.vertices.count()
     corpus.edges.count()
