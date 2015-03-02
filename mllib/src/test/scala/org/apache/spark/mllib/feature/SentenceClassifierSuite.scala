@@ -31,19 +31,20 @@ class SentenceClassifierSuite extends FunSuite with MLlibTestSparkContext {
     val sparkHome = sys.props.getOrElse("spark.test.home", fail("spark.test.home is not set!"))
     import org.apache.spark.mllib.feature._
     import breeze.linalg.{norm => brzNorm}
-    val txt = sc.textFile(s"$sparkHome/data/mllib/deal_info.txt").
-      map(_.split(" ")).
-      filter(_.length > 6).
-      map(_.toIterable).cache()
+    // http://cogcomp.cs.illinois.edu/Data/QA/QC/train_5500.label
+    val txt = sc.textFile(s"$sparkHome/data/mllib/sst/train_5500.label").
+      map { line =>
+      line.split(":").map(_.split(" ")).flatten.map(_.trim).filter(_.nonEmpty)
+    }.filter(_.length > 1).map(_.toIterable).cache()
     println("txt " + txt.count)
     val word2Vec = new Word2Vec()
     word2Vec.
       setVectorSize(64).
-      setNumIterations(1)
-    val model = word2Vec.fit(txt)
-    val Array(txtTrain, txtTest) = txt.repartition(36).randomSplit(Array(0.5, 0.5))
+      setNumIterations(3)
+    val model = word2Vec.fit(txt.map(_.tail))
+    val Array(txtTrain, txtTest) = txt.repartition(2).randomSplit(Array(0.7, 0.3))
     val (sent2vec, wordVec, wordIndex, labelIndex) =
-      SentenceClassifier.train(txtTrain.cache(), model, 20000, 0.1, 0.006)
+      SentenceClassifier.train(txtTrain.cache(), model, 2000, 0.1, 0.06)
     println(s"wordVec ${wordVec.valuesIterator.map(_.abs).sum / wordVec.length}")
 
     val vecs = txtTest.map { t =>
@@ -57,7 +58,7 @@ class SentenceClassifierSuite extends FunSuite with MLlibTestSparkContext {
 
     val sum = vecs.count
     val err = vecs.filter(t => labelIndex(t._1) != t._2).count
-    println(s"Error: $err / $sum = ${err.toDouble / sum * 100}")
+    println(s"Error: $err / $sum = ${err.toDouble / sum * 100} % ")
 
   }
 }
