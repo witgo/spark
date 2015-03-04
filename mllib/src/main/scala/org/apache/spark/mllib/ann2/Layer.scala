@@ -166,27 +166,31 @@ object FunctionalLayerModel {
 
 /* Network topology that holds the array of layers.
 * */
-class Topology(val layers: Array[Layer]) extends Serializable {
+class Topology(val layers: Array[Layer], val dropoutProb: Array[Double]) extends Serializable {
 
 }
 
 /* Factory for some of the frequently-used topologies
 * */
 object Topology {
+  def apply(layers: Array[Layer]): Topology = {
+    new Topology(layers, Array.fill[Double](layers.length)(0D))
+  }
+
   def multiLayerPerceptron(layerSizes: Array[Int]): Topology = {
     val layers = new Array[Layer]((layerSizes.length - 1) * 2)
     for(i <- 0 until layerSizes.length - 1){
       layers(i * 2) = new AffineLayer(layerSizes(i), layerSizes(i + 1))
       layers(i * 2 + 1) = new FunctionalLayer(ANNFunctions.Sigmoid, ANNFunctions.SigmoidDerivative)
     }
-    new Topology(layers)
+    Topology(layers)
   }
 }
 
 /* Model of Feed Forward Neural Network.
 * Implements forward, gradient computation and can return weights in vector format.
 * */
-class FeedForwardModel(val layerModels: Array[LayerModel]) extends Serializable {
+class FeedForwardModel(val layerModels: Array[LayerModel], val topology: Topology) extends Serializable {
   def forward(data: BDM[Double]): Array[BDM[Double]] = {
     val outputs = new Array[BDM[Double]](layerModels.length)
     outputs(0) = layerModels(0).eval(data)
@@ -271,7 +275,7 @@ object FeedForwardModel {
       layerModels(i) = layers(i).getInstance(weights, offset)
       offset += layerModels(i).size
     }
-    new FeedForwardModel(layerModels)
+    new FeedForwardModel(layerModels, topology)
   }
 
   def apply(topology: Topology, seed: Long = 11L): FeedForwardModel = {
@@ -282,7 +286,7 @@ object FeedForwardModel {
       layerModels(i) = layers(i).getInstance(seed)
       offset += layerModels(i).size
     }
-    new FeedForwardModel(layerModels)
+    new FeedForwardModel(layerModels, topology)
   }
 }
 
