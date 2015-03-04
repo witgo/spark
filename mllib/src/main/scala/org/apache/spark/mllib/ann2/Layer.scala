@@ -206,16 +206,9 @@ class FeedForwardModel(val layerModels: Array[LayerModel], val topology: Topolog
     val deltas = new Array[BDM[Double]](layerModels.length)
     val error = outputs.last - target
     val L = layerModels.length - 1
-    // TODO: make the following not so ugly, parametrize error/cost function
-    // if last two layers form an affine + function layer == sigmoid or softmax
-    if (layerModels(L).size == 0 && layerModels(L - 1).size > 0) {
-      deltas(L) = error
-      deltas(L - 1) = layerModels(L).prevDelta(error, outputs(L))
-    } else {
-      assert(false, "Network must have Affine+Functional layers on the top. " +
-        "Other cases are not implemented yet.")
-    }
-    for (i <- (L - 2) to (0, -1)) {
+    // TODO: parametrize error/cost function
+    deltas(L) = error
+    for (i <- (L - 1) to (0, -1)) {
       deltas(i) = layerModels(i + 1).prevDelta(deltas(i + 1), outputs(i + 1))
     }
     val grads = new Array[Vector](layerModels.length)
