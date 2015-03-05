@@ -38,13 +38,13 @@ import LDA._
 import LDAUtils._
 
 class LDA private[mllib](
-  @transient var corpus: Graph[VD, ED],
-  val numTopics: Int,
-  val numTerms: Int,
-  val alpha: Double,
-  val beta: Double,
-  val alphaAS: Double,
-  @transient val storageLevel: StorageLevel)
+  @transient private var corpus: Graph[VD, ED],
+  private val numTopics: Int,
+  private val numTerms: Int,
+  private var alpha: Double,
+  private var beta: Double,
+  private var alphaAS: Double,
+  private var storageLevel: StorageLevel)
   extends Serializable with Logging {
 
   def this(docs: RDD[(DocId, SSV)],
@@ -68,10 +68,37 @@ class LDA private[mllib](
    * 语料库总的词数(包含重复)
    */
   val numTokens = corpus.edges.map(e => e.attr.size.toDouble).sum().toLong
+
+  def setAlpha(alpha: Double): this.type = {
+    this.alpha = alpha
+    this
+  }
+
+  def setBeta(beta: Double): this.type = {
+    this.beta = beta
+    this
+  }
+
+  def setAlphaAS(alphaAS: Double): this.type = {
+    this.alphaAS = alphaAS
+    this
+  }
+
+  def setStorageLevel(newStorageLevel: StorageLevel): this.type = {
+    this.storageLevel = newStorageLevel
+    this
+  }
+
+  def setSeed(newSeed: Int): this.type = {
+    this.seed = newSeed
+    this
+  }
+
+  def getCorpus = corpus
+
   // scalastyle:on
 
-  @transient private val sc = corpus.vertices.context
-  @transient private val seed = new Random().nextInt()
+  @transient private var seed = new Random().nextInt()
   @transient private var innerIter = 1
   @transient private var totalTopicCounter: BDV[Count] = collectTotalTopicCounter(corpus)
 
@@ -80,7 +107,7 @@ class LDA private[mllib](
   private def docVertices = corpus.vertices.filter(t => t._1 < 0)
 
   private def checkpoint(): Unit = {
-    if (innerIter % 10 == 0 && sc.getCheckpointDir.isDefined) {
+    if (innerIter % 10 == 0 && corpus.edges.sparkContext.getCheckpointDir.isDefined) {
       val edges = corpus.edges.map(t => t)
       edges.checkpoint()
       val newCorpus: Graph[VD, ED] = Graph.fromEdges(edges, null, storageLevel, storageLevel)
@@ -373,15 +400,15 @@ object LDA {
     edges.persist(storageLevel)
     var corpus: Graph[VD, ED] = Graph.fromEdges(edges, null, storageLevel, storageLevel)
     // degree-based hashing
-    //  val degrees = corpus.outerJoinVertices(corpus.degrees) { (vid, data, deg) => deg.getOrElse(0)}
-    //  val numPartitions = edges.partitions.size
-    //  val partitionStrategy = new DBHPartitioner(numPartitions)
-    //  val newEdges = degrees.triplets.map { e =>
-    //    (partitionStrategy.getPartition(e), Edge(e.srcId, e.dstId, e.attr))
-    //  }.partitionBy(new HashPartitioner(numPartitions)).map(_._2)
-    //  corpus = Graph.fromEdges(newEdges, null, storageLevel, storageLevel)
+    val degrees = corpus.outerJoinVertices(corpus.degrees) { (vid, data, deg) => deg.getOrElse(0)}
+    val numPartitions = edges.partitions.size
+    val partitionStrategy = new DBHPartitioner(numPartitions)
+    val newEdges = degrees.triplets.map { e =>
+      (partitionStrategy.getPartition(e), Edge(e.srcId, e.dstId, e.attr))
+    }.partitionBy(new HashPartitioner(numPartitions)).map(_._2)
+    corpus = Graph.fromEdges(newEdges, null, storageLevel, storageLevel)
     // end degree-based hashing
-    corpus = corpus.partitionBy(PartitionStrategy.EdgePartition2D)
+    // corpus = corpus.partitionBy(PartitionStrategy.EdgePartition2D)
     corpus = updateCounter(corpus, numTopics).cache()
     corpus.vertices.count()
     corpus.edges.count()
@@ -464,9 +491,6 @@ object LDA {
     val used = docTopicCounter.used
     val dSum = dData(docTopicCounter.used - 1)
     val distSum = tSum + wSum + dSum
-    if (gen.nextDouble() < 1e-32) {
-      println(s"dSum: ${dSum / distSum}")
-    }
     val genSum = gen.nextDouble() * distSum
     if (genSum < dSum) {
       val dGenSum = gen.nextDouble() * dSum
@@ -600,7 +624,7 @@ object LDA {
       // 如果采样到当前token的Topic这丢弃掉
       // svCounter == 1 && table.length > 1 采样到token的Topic 但包含其他token
       // svCounter > 1 && gen.nextDouble() < 1.0 / svCounter 采样的Topic 有1/svCounter 概率属于当前token
-      if ((svCounter == 1 && table.length > 1) ||
+      if ((svCounter == 1 && table._1.length > 1) ||
         (svCounter > 1 && gen.nextDouble() < 1.0 / svCounter)) {
         return sampleSV(gen, table, sv, currentTopic)
       }
@@ -610,6 +634,11 @@ object LDA {
 
 }
 
+/**
+ * Degree-Based Hashing, the paper:
+ * http://nips.cc/Conferences/2014/Program/event.php?ID=4569
+ * @param partitions
+ */
 private class DBHPartitioner(partitions: Int) extends Partitioner {
   val mixingPrime: Long = 1125899906842597L
 
@@ -621,8 +650,8 @@ private class DBHPartitioner(partitions: Int) extends Partitioner {
     getPartition(idx)
   }
 
-  def getPartition(src: Int): PartitionID = {
-    (math.abs(src * mixingPrime) % partitions).toInt
+  def getPartition(idx: Int): PartitionID = {
+    (math.abs(idx * mixingPrime) % partitions).toInt
   }
 
   override def equals(other: Any): Boolean = other match {

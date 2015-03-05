@@ -284,7 +284,7 @@ object LDAModel {
 
 private[mllib] object LDAUtils {
 
-  type Table = Array[(Int, Int, Double)]
+  type Table = (Array[Int], Array[Int], Array[Double])
 
   @transient private lazy val tableOrdering = new scala.math.Ordering[(Int, Double)] {
     override def compare(x: (Int, Double), y: (Int, Double)): Int = {
@@ -305,7 +305,7 @@ private[mllib] object LDAUtils {
     used: Int,
     sum: Double): Table = {
     val pMean = 1.0 / used
-    val table = new Table(used)
+    val table = (new Array[Int](used), new Array[Int](used), new Array[Double](used))
 
     val lq = new JPriorityQueue[(Int, Double)](used, tableOrdering)
     val hq = new JPriorityQueue[(Int, Double)](used, tableReverseOrdering)
@@ -324,7 +324,9 @@ private[mllib] object LDAUtils {
     while (!lq.isEmpty & !hq.isEmpty) {
       val (i, pi) = lq.remove()
       val (h, ph) = hq.remove()
-      table(offset) = (i, h, pi)
+      table._1(offset) = i
+      table._2(offset) = h
+      table._3(offset) = pi
       val pd = ph - (pMean - pi)
       if (pd >= pMean) {
         hq.add((h, pd))
@@ -336,47 +338,31 @@ private[mllib] object LDAUtils {
     while (!hq.isEmpty) {
       val (h, ph) = hq.remove()
       assert(ph - pMean < 1e-8)
-      table(offset) = (h, h, ph)
+      table._1(offset) = h
+      table._2(offset) = h
+      table._3(offset) = ph
       offset += 1
     }
 
     while (!lq.isEmpty) {
       val (i, pi) = lq.remove()
       assert(pMean - pi < 1e-8)
-      table(offset) = (i, i, pi)
+      table._1(offset) = i
+      table._2(offset) = i
+      table._3(offset) = pi
       offset += 1
     }
-
-    // 测试代码 随即抽样一个样本验证其概率
-    //    val (di, dp) = probs(Utils.random.nextInt(used))
-    //    val ds = table.map { t =>
-    //      if (t._1 == di) {
-    //        if (t._2 == t._1) {
-    //          pMean
-    //        } else {
-    //          t._3
-    //        }
-    //      } else if (t._2 == di) {
-    //        pMean - t._3
-    //      } else {
-    //        0.0
-    //      }
-    //    }.sum
-    //    assert((ds - dp).abs < 1e-4)
-
     table
   }
 
   def sampleAlias(gen: Random, table: Table): Int = {
-    val l = table.length
+    val l = table._1.length
     val bin = gen.nextInt(l)
-    val i = table(bin)._1
-    val h = table(bin)._2
-    val p = table(bin)._3
+    val p = table._3(bin)
     if (l * p > gen.nextDouble()) {
-      i
+      table._1(bin)
     } else {
-      h
+      table._2(bin)
     }
   }
 
