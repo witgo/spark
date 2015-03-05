@@ -68,7 +68,7 @@ class Sentence2vec(
     (sentGrad ++ mlpGrad, cost)
   }
 
-  protected[mllib] def mlpComputeGradient(
+  protected[mllib] def mlpComputeGradientBOW(
     sentence: Array[Int],
     sentVec: BDM[Double],
     sentOut: BDV[Double]) = {
@@ -89,21 +89,18 @@ class Sentence2vec(
     val cost = NNUtil.crossEntropy(mlpOuts.last, label)
     val prevDelta: BDM[Double] = mlp.innerLayers.head.weight.t * mlpDeltas.head
     val inputDelta = prevDelta(::, 0)
-    if (rand.nextDouble() < 0.001) {
-      println(s"mlpDelta: ${inputDelta.valuesIterator.map(_.abs).sum / vectorSize}")
-    }
     assert(inputDelta.length == vectorSize)
 
     (inputDelta, mlpGrads, cost)
   }
 
-  protected[mllib] def mlpComputeGradient2(
+  protected[mllib] def mlpComputeGradientSkipGram(
     sentence: Array[Int],
     sentVec: BDM[Double],
     sentOut: BDV[Double]) = {
-    if (rand.nextDouble() < 0.001) {
-      println(s"sentOut: ${sentOut.valuesIterator.map(_.abs).sum / sentOut.length}")
-    }
+    //    if (rand.nextDouble() < 0.001) {
+    //      println(s"sentOut: ${sentOut.valuesIterator.map(_.abs).sum / sentOut.length}")
+    //    }
     val sentenceSize = sentence.size
     val randomize = Utils.randomize(0 until sentenceSize).slice(0, 1)
     val randomizeSize = randomize.size
@@ -139,11 +136,49 @@ class Sentence2vec(
     val prevDelta: BDM[Double] = mlp.innerLayers.head.weight.t * mlpDeltas.head
     val inputDelta = brzSum(prevDelta, brzAxis._1)
     inputDelta :/= randomizeSize.toDouble
-    if (rand.nextDouble() < 0.001) {
-      println(s"inputDelta: ${inputDelta.valuesIterator.map(_.abs).sum / vectorSize}")
-    }
     assert(inputDelta.length == vectorSize)
+    (inputDelta, mlpGrads, cost)
+  }
 
+  protected[mllib] def mlpComputeGradient(
+    sentence: Array[Int],
+    sentVec: BDM[Double],
+    sentOut: BDV[Double]) = {
+    val sentenceSize = sentence.size
+    val randomize = Utils.randomize(0 until sentenceSize).slice(0, 10)
+    val randomizeSize = randomize.size
+    val mlpIn = BDM.zeros[Double](vectorSize, randomizeSize)
+    val label = BDM.zeros[Double](vectorSize, randomizeSize)
+    for (i <- 0 until randomizeSize) {
+      val pos = randomize(i)
+      val word = sentence(pos)
+      val b = rand.nextInt(windowSize)
+      var s = 0.0
+      val sum = mlpIn(::, i)
+      var a = b
+      while (a < windowSize * 2 + 1 - b) {
+        if (a != windowSize) {
+          val c = pos - windowSize + a
+          if (c >= 0 && c < sentenceSize) {
+            val lastWord = sentence(c)
+            sum :+= wordToVector(lastWord)
+            s += 1
+          }
+        }
+        a += 1
+      }
+      assert(s > 0)
+      sum :/= s
+      sum :+= sentOut
+      label(::, i) := wordToVector(word)
+    }
+    val (mlpOuts, mlpDeltas) = mlp.computeDelta(mlpIn, label)
+    val mlpGrads = mlp.computeGradientGivenDelta(mlpIn, mlpOuts, mlpDeltas)
+    val cost = NNUtil.meanSquaredError(mlpOuts.last, label) / randomizeSize
+    val prevDelta: BDM[Double] = mlp.innerLayers.head.weight.t * mlpDeltas.head
+    val inputDelta = brzSum(prevDelta, brzAxis._1)
+    inputDelta :/= randomizeSize.toDouble
+    assert(inputDelta.length == vectorSize)
     (inputDelta, mlpGrads, cost)
   }
 
@@ -220,7 +255,7 @@ object Sentence2vec {
     sentenceLayer(1) = new DynamicKMaxSentencePooling(6, 0.5)
     val layer = new TanhSentenceLayer(64, vectorSize / 4, 5)
     if (layer.outChannels > 1 && layer.inChannels > 1) {
-      val s = (layer.outChannels * 0.8).floor.toInt
+      val s = (layer.outChannels * 0.5).floor.toInt
       for (i <- 0 until layer.inChannels) {
         for (j <- 0 until s) {
           val offset = (i + j) % layer.outChannels
@@ -230,7 +265,7 @@ object Sentence2vec {
     }
     sentenceLayer(2) = layer
     sentenceLayer(3) = new KMaxSentencePooling(4)
-    val mlpLayer = initMLPLayers(Array(vectorSize, 32, word2Index.size))
+    val mlpLayer = initMLPLayers(Array(vectorSize, 128, vectorSize))
     val mlp = new MLP(mlpLayer, Array(0.2, 0.0))
     val sent2vec = new Sentence2vec(sentenceLayer, mlp, vectorSize, 5)
     val wordBroadcast = dataset.context.broadcast(word2Vec)
@@ -339,7 +374,7 @@ object Sentence2vec {
       val numIn = topology(layer)
       val numOut = topology(layer + 1)
       layers(layer) = if (layer == numLayer - 1) {
-        new SoftMaxLayer(numIn, numOut)
+        new IdentityLayer(numIn, numOut)
       }
       else {
         new TanhLayer(numIn, numOut)

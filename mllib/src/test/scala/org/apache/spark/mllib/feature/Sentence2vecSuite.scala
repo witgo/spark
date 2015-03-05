@@ -25,9 +25,6 @@ import org.apache.spark.SparkContext._
 import breeze.linalg.{norm => brzNorm}
 import breeze.linalg.functions.euclideanDistance
 
-//filter(w => w.length > 1).
-//filter(w => !w.contains("_")).
-//filter(w => !w.contains("-"))
 class Sentence2vecSuite extends FunSuite with MLlibTestSparkContext {
 
   test("Sentence2vec") {
@@ -41,11 +38,11 @@ class Sentence2vecSuite extends FunSuite with MLlibTestSparkContext {
     println("txt " + txt.count)
     val word2Vec = new Word2Vec()
     word2Vec.
-      setVectorSize(32).
+      setVectorSize(64).
       setNumIterations(1)
     val model = word2Vec.fit(txt)
     // txt = txt.repartition(32)
-    val (sent2vec, word2, word2Index) = Sentence2vec.train(txt, model, 2000, 0.05, 0.0005)
+    val (sent2vec, word2, word2Index) = Sentence2vec.train(txt, model, 2000, 0.1, 0.005)
     println(s"word2 ${word2.valuesIterator.map(_.abs).sum / word2.length}")
     val vecs = txt.map { t =>
       val vec = t.filter(w => word2Index.contains(w)).map(w => word2Index(w)).toArray
@@ -63,7 +60,6 @@ class Sentence2vecSuite extends FunSuite with MLlibTestSparkContext {
         (sim, v._1)
       }).sortByKey(true).take(4).foreach(t => println(s"${t._1} =>${t._2.mkString(" ")} \n"))
     }
-
 
   }
 }
