@@ -336,7 +336,7 @@ private[mllib] class SoftPlusLayer(
   }
 }
 
-private[mllib] class Identity(
+private[mllib] class IdentityLayer(
   val weight: BDM[Double],
   val bias: BDV[Double]) extends Layer with Logging {
 
@@ -373,7 +373,7 @@ private[mllib] object Layer {
       case "Sigmoid" =>
         new SigmoidLayer(weight, bias)
       case "Identity" =>
-        new Identity(weight, bias)
+        new IdentityLayer(weight, bias)
       case _ =>
         throw new IllegalArgumentException("layerType is not correct")
     }
