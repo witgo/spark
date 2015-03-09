@@ -233,16 +233,20 @@ class LDAModel private[mllib](
     alpha: Double,
     alphaAS: Double,
     beta: Double): (Double, Table) = {
+    if (termTopicCounter.used == 0) return (0.0, null)
     var w = cacheMap(termId)
     if (w == null || w.get() == null) {
       val t = wSparse(totalTopicCounter, termTopicCounter,
         numTokens, numTerms, alpha, alphaAS, beta)
-      w = new SoftReference((t._1, generateAlias(t._2, t._1)))
+      val updateW = (t._1, generateAlias(t._2, t._1))
+      w = new SoftReference(updateW)
       cacheMap.update(termId, w)
-
+      updateW
+    } else {
+      w.get()
     }
-    w.get()
   }
+
 
   private def docTable(
     totalTopicCounter: BDV[Double],
@@ -353,24 +357,6 @@ private[mllib] object LDAUtils {
       table(offset) = (i, i, pi)
       offset += 1
     }
-
-    // 测试代码 随即抽样一个样本验证其概率
-    //    val (di, dp) = probs(Utils.random.nextInt(used))
-    //    val ds = table.map { t =>
-    //      if (t._1 == di) {
-    //        if (t._2 == t._1) {
-    //          pMean
-    //        } else {
-    //          t._3
-    //        }
-    //      } else if (t._2 == di) {
-    //        pMean - t._3
-    //      } else {
-    //        0.0
-    //      }
-    //    }.sum
-    //    assert((ds - dp).abs < 1e-4)
-
     table
   }
 

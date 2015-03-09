@@ -661,15 +661,17 @@ object LDA {
     cacheMap: AppendOnlyMap[VertexId, SoftReference[(Double, Table)]],
     docTopicCounter: VD,
     docId: VertexId): (Double, Table) = {
-    var d = cacheMap(docId)
-    if (updateFunc(d)) {
+    val cacheD = cacheMap(docId)
+    if (!updateFunc(cacheD)) {
+      cacheD.get
+    } else {
       docTopicCounter.synchronized {
         val sv = dSparse(docTopicCounter)
-        d = new SoftReference((sv._1, generateAlias(sv._2, sv._1)))
-        cacheMap.update(docId, d)
+        val d = (sv._1, generateAlias(sv._2, sv._1))
+        cacheMap.update(docId, new SoftReference(d))
+        d
       }
     }
-    d.get()
   }
 
   private def wordTable(
@@ -680,15 +682,17 @@ object LDA {
     termId: VertexId,
     numTerms: Double,
     beta: Double): (Double, Table) = {
-    var w = cacheMap(termId)
-    if (updateFunc(w)) {
+    val cacheW = cacheMap(termId)
+    if (!updateFunc(cacheW)) {
+      cacheW.get
+    } else {
       termTopicCounter.synchronized {
         val sv = wSparse(totalTopicCounter, termTopicCounter, numTerms, beta)
-        w = new SoftReference((sv._1, generateAlias(sv._2, sv._1)))
-        cacheMap.update(termId, w)
+        val w = (sv._1, generateAlias(sv._2, sv._1))
+        cacheMap.update(termId, new SoftReference(w))
+        w
       }
     }
-    w.get()
   }
 
   private def sampleDoc(gen: Random, table: Table, sv: VD, currentTopic: Int): Int = {
