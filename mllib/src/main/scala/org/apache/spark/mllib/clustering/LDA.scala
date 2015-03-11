@@ -26,7 +26,7 @@ SparseVector => BSV, sum => brzSum}
 
 import org.apache.spark.broadcast.Broadcast
 import org.apache.spark.graphx._
-import org.apache.spark.Logging
+import org.apache.spark.{HashPartitioner, Logging, Partitioner}
 import org.apache.spark.mllib.linalg.distributed.{MatrixEntry, RowMatrix}
 import org.apache.spark.mllib.linalg.{DenseVector => SDV, SparseVector => SSV, Vector => SV}
 import org.apache.spark.rdd.RDD
@@ -40,13 +40,13 @@ import LDA._
 import LDAUtils._
 
 class LDA private[mllib](
-  @transient var corpus: Graph[VD, ED],
-  val numTopics: Int,
-  val numTerms: Int,
-  val alpha: Double,
-  val beta: Double,
-  val alphaAS: Double,
-  @transient val storageLevel: StorageLevel)
+  @transient private var corpus: Graph[VD, ED],
+  private val numTopics: Int,
+  private val numTerms: Int,
+  private var alpha: Double,
+  private var beta: Double,
+  private var alphaAS: Double,
+  private var storageLevel: StorageLevel)
   extends Serializable with Logging {
 
   def this(docs: RDD[(DocId, SSV)],
@@ -70,12 +70,53 @@ class LDA private[mllib](
    * 语料库总的词数(包含重复)
    */
   val numTokens = corpus.edges.map(e => e.attr.size.toDouble).sum().toLong
+
+  /**
+   * 设置 alpha
+   * @param alpha 推荐 alpha * numTopics = 0.1 - 2.0
+   */
+  def setAlpha(alpha: Double): this.type = {
+    this.alpha = alpha
+    this
+  }
+
+  /**
+   * 设置 beta
+   * @param beta 推荐 beta * numTopics = 0.1 - 2.0
+   */
+  def setBeta(beta: Double): this.type = {
+    this.beta = beta
+    this
+  }
+
+  /**
+   * 设置非对称先验参数 alphaAS
+   * @param alphaAS 取值越小生成的主题分布越稀疏
+   * @return
+   */
+  def setAlphaAS(alphaAS: Double): this.type = {
+    this.alphaAS = alphaAS
+    this
+  }
+
+  def setStorageLevel(newStorageLevel: StorageLevel): this.type = {
+    this.storageLevel = newStorageLevel
+    this
+  }
+
+  def setSeed(newSeed: Int): this.type = {
+    this.seed = newSeed
+    this
+  }
+
   // scalastyle:on
 
   @transient private val sc = corpus.vertices.context
-  @transient private val seed = new Random().nextInt()
+  @transient private var seed = new Random().nextInt()
   @transient private var innerIter = 1
   @transient private var totalTopicCounter: BDV[Count] = collectTotalTopicCounter(corpus)
+
+  def getCorpus: Graph[VD, ED] = corpus
 
   private def termVertices = corpus.vertices.filter(t => t._1 >= 0)
 
@@ -131,7 +172,7 @@ class LDA private[mllib](
           (term, c.array)
       }).getOrElse(newTermTopicCounter)
 
-      termTopicCounter.cache().count()
+      termTopicCounter.persist(StorageLevel.MEMORY_AND_DISK).count()
       Option(previousTermTopicCounter).foreach(_.unpersist())
       previousTermTopicCounter = termTopicCounter
     }
@@ -254,7 +295,6 @@ object LDA {
   private[mllib] type Count = Int
   private[mllib] type ED = Array[Count]
   private[mllib] type VD = OpenAddressHashArray[Int]
-  private[mllib] type Table = Array[(Int, Int, Double)]
 
   def train(docs: RDD[(DocId, SSV)],
     numTopics: Int = 2048,
@@ -336,16 +376,15 @@ object LDA {
             }
             val (dSum, d) = docTopicCounter.synchronized {
               docTable(x => {
-                x == null || x.get() == null || gen.nextDouble() < 1e-6
+                x == null || x.get() == null || gen.nextDouble() < 1e-2
               }, docTableCache, docTopicCounter, docId)
             }
             val (wSum, w) = termTopicCounter.synchronized {
               wordTable(x => {
-                x == null || x.get() == null || gen.nextDouble() < 1e-6
+                x == null || x.get() == null || gen.nextDouble() < 1e-4
               }, wordTableCache, totalTopicCounter,
                 termTopicCounter, termId, numTerms, beta)
             }
-
             for (i <- 0 until topics.length) {
               var docProposal = gen.nextDouble() < 0.5
               var maxSampling = 8
@@ -387,9 +426,9 @@ object LDA {
                     termTopicCounter(currentTopic) -= 1
                     termTopicCounter(newTopic) += 1
                   }
-
                   totalTopicCounter(currentTopic) -= 1
                   totalTopicCounter(newTopic) += 1
+
                   topics(i) = newTopic
                 }
 
@@ -442,10 +481,22 @@ object LDA {
           initializeEdges(gen, bsv, docId, numTopics, model)
       }
     })
+    edges.persist(storageLevel)
     var corpus: Graph[VD, ED] = Graph.fromEdges(edges, null, storageLevel, storageLevel)
-    corpus = corpus.partitionBy(PartitionStrategy.EdgePartition1D)
+    // degree-based hashing
+    val degrees = corpus.outerJoinVertices(corpus.degrees) { (vid, data, deg) => deg.getOrElse(0)}
+    val numPartitions = edges.partitions.size
+    val partitionStrategy = new DBHPartitioner(numPartitions)
+    val newEdges = degrees.triplets.map { e =>
+      (partitionStrategy.getPartition(e), Edge(e.srcId, e.dstId, e.attr))
+    }.partitionBy(new HashPartitioner(numPartitions)).map(_._2)
+    corpus = Graph.fromEdges(newEdges, null, storageLevel, storageLevel)
+    // end degree-based hashing
+    // corpus = corpus.partitionBy(PartitionStrategy.EdgePartition2D)
     corpus = updateCounter(corpus, numTopics).cache()
     corpus.vertices.count()
+    corpus.edges.count()
+    edges.unpersist()
     corpus
   }
 
@@ -703,7 +754,7 @@ object LDA {
       // 如果采样到当前token的Topic这丢弃掉
       // svCounter == 1 && table.length > 1 采样到token的Topic 但包含其他token
       // svCounter > 1 && gen.nextDouble() < 1.0 / svCounter 采样的Topic 有1/svCounter 概率属于当前token
-      if ((svCounter == 1 && table.length > 1) ||
+      if ((svCounter == 1 && table._1.length > 1) ||
         (svCounter > 1 && gen.nextDouble() < 1.0 / svCounter)) {
         return sampleDoc(gen, table, sv, currentTopic)
       }
@@ -712,7 +763,37 @@ object LDA {
   }
 }
 
-class LDAKryoRegistrator extends KryoRegistrator {
+/**
+ * Degree-Based Hashing, the paper:
+ * http://nips.cc/Conferences/2014/Program/event.php?ID=4569
+ * @param partitions
+ */
+private class DBHPartitioner(partitions: Int) extends Partitioner {
+  val mixingPrime: Long = 1125899906842597L
+
+  def numPartitions = partitions
+
+  def getPartition(key: Any): Int = {
+    val edge = key.asInstanceOf[EdgeTriplet[Int, ED]]
+    val idx = math.min(edge.srcAttr, edge.dstAttr)
+    getPartition(idx)
+  }
+
+  def getPartition(idx: Int): PartitionID = {
+    (math.abs(idx * mixingPrime) % partitions).toInt
+  }
+
+  override def equals(other: Any): Boolean = other match {
+    case h: DBHPartitioner =>
+      h.numPartitions == numPartitions
+    case _ =>
+      false
+  }
+
+  override def hashCode: Int = numPartitions
+}
+
+private[mllib] class LDAKryoRegistrator extends KryoRegistrator {
   def registerClasses(kryo: com.esotericsoftware.kryo.Kryo) {
     val gkr = new GraphKryoRegistrator
     gkr.registerClasses(kryo)
