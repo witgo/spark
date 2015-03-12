@@ -299,26 +299,20 @@ object LDA {
   def train(docs: RDD[(DocId, SSV)],
     numTopics: Int = 2048,
     totalIter: Int = 150,
-    burnIn: Int = 5,
     alpha: Double = 0.1,
     beta: Double = 0.01,
     alphaAS: Double = 0.1): LDAModel = {
-    require(totalIter > burnIn, "totalIter is less than burnIn")
     require(totalIter > 0, "totalIter is less than 0")
-    require(burnIn > 0, "burnIn is less than 0")
     val topicModeling = new LDA(docs, numTopics, alpha, beta, alphaAS)
-    topicModeling.runGibbsSampling(totalIter - burnIn)
-    topicModeling.saveModel(burnIn)
+    topicModeling.runGibbsSampling(totalIter - 1)
+    topicModeling.saveModel(1)
   }
 
   def incrementalTrain(docs: RDD[(DocId, SSV)],
     computedModel: LDAModel,
     alphaAS: Double = 1,
-    totalIter: Int = 150,
-    burnIn: Int = 5): LDAModel = {
-    require(totalIter > burnIn, "totalIter is less than burnIn")
+    totalIter: Int = 150): LDAModel = {
     require(totalIter > 0, "totalIter is less than 0")
-    require(burnIn > 0, "burnIn is less than 0")
     val numTopics = computedModel.ttc.size
     val alpha = computedModel.alpha
     val beta = computedModel.beta
@@ -327,8 +321,8 @@ object LDA {
     val topicModeling = new LDA(docs, numTopics, alpha, beta, alphaAS,
       computedModel = broadcastModel)
     broadcastModel.unpersist()
-    topicModeling.runGibbsSampling(totalIter - burnIn)
-    topicModeling.saveModel(burnIn)
+    topicModeling.runGibbsSampling(totalIter - 1)
+    topicModeling.saveModel(1)
   }
 
   private[mllib] def sampleTokens(
