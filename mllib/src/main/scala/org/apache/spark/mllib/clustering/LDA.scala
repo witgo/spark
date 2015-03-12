@@ -142,10 +142,10 @@ class LDA private[mllib](
     innerIter += 1
   }
 
-  def saveModel(burnInIter: Int): LDAModel = {
+  def saveModel(iter: Int = 1): LDAModel = {
     var termTopicCounter: RDD[(VertexId, VD)] = null
-    for (iter <- 1 to burnInIter) {
-      logInfo(s"Save TopicModel (Iteration $iter/$burnInIter)")
+    for (iter <- 1 to iter) {
+      logInfo(s"Save TopicModel (Iteration $iter/$iter)")
       var previousTermTopicCounter = termTopicCounter
       gibbsSampling()
       val newTermTopicCounter = termVertices
@@ -154,7 +154,7 @@ class LDA private[mllib](
           (term, a :+ b)
       }).getOrElse(newTermTopicCounter)
 
-      termTopicCounter.cache().count()
+      termTopicCounter.persist(storageLevel).count()
       Option(previousTermTopicCounter).foreach(_.unpersist())
       previousTermTopicCounter = termTopicCounter
     }
@@ -162,9 +162,9 @@ class LDA private[mllib](
     termTopicCounter.collect().foreach { case (term, counter) =>
       model.merge(term.toInt, counter)
     }
-    model.gtc :/= burnInIter.toDouble
+    model.gtc :/= iter.toDouble
     model.ttc.foreach { ttc =>
-      ttc :/= burnInIter.toDouble
+      ttc :/= iter.toDouble
       ttc.compact()
     }
     model
@@ -281,26 +281,20 @@ object LDA {
   def train(docs: RDD[(DocId, SSV)],
     numTopics: Int = 2048,
     totalIter: Int = 150,
-    burnIn: Int = 5,
-    alpha: Double = 0.1,
+    alpha: Double = 0.01,
     beta: Double = 0.01,
     alphaAS: Double = 0.1): LDAModel = {
-    require(totalIter > burnIn, "totalIter is less than burnIn")
     require(totalIter > 0, "totalIter is less than 0")
-    require(burnIn > 0, "burnIn is less than 0")
     val topicModeling = new LDA(docs, numTopics, alpha, beta, alphaAS)
-    topicModeling.runGibbsSampling(totalIter - burnIn)
-    topicModeling.saveModel(burnIn)
+    topicModeling.runGibbsSampling(totalIter - 1)
+    topicModeling.saveModel(1)
   }
 
   def incrementalTrain(docs: RDD[(DocId, SSV)],
     computedModel: LDAModel,
     alphaAS: Double = 1,
-    totalIter: Int = 150,
-    burnIn: Int = 5): LDAModel = {
-    require(totalIter > burnIn, "totalIter is less than burnIn")
+    totalIter: Int = 150): LDAModel = {
     require(totalIter > 0, "totalIter is less than 0")
-    require(burnIn > 0, "burnIn is less than 0")
     val numTopics = computedModel.ttc.size
     val alpha = computedModel.alpha
     val beta = computedModel.beta
@@ -309,8 +303,8 @@ object LDA {
     val topicModeling = new LDA(docs, numTopics, alpha, beta, alphaAS,
       computedModel = broadcastModel)
     broadcastModel.unpersist()
-    topicModeling.runGibbsSampling(totalIter - burnIn)
-    topicModeling.saveModel(burnIn)
+    topicModeling.runGibbsSampling(totalIter - 1)
+    topicModeling.saveModel(1)
   }
 
   private[mllib] def sampleTokens(
@@ -341,15 +335,32 @@ object LDA {
             val topics = triplet.attr
             for (i <- 0 until topics.length) {
               val currentTopic = topics(i)
-              dSparse(totalTopicCounter, termTopicCounter, docTopicCounter, dData,
-                currentTopic, numTokens, numTerms, alpha, alphaAS, beta)
-              val (wSum, w) = wordTable(wordTableCache, totalTopicCounter,
-                termTopicCounter, termId, numTokens, numTerms, alpha, alphaAS, beta)
-              val newTopic = tokenSampling(gen, t, tSum, w, termTopicCounter, wSum,
-                docTopicCounter, dData, currentTopic)
+              docTopicCounter.synchronized {
+                termTopicCounter.synchronized {
+                  dSparse(totalTopicCounter, termTopicCounter, docTopicCounter, dData,
+                    currentTopic, numTokens, numTerms, alpha, alphaAS, beta)
+                  val (wSum, w) = wordTable(wordTableCache, totalTopicCounter,
+                    termTopicCounter, termId, numTokens, numTerms, alpha, alphaAS, beta)
+                  val newTopic = tokenSampling(gen, t, tSum, w, termTopicCounter, wSum,
+                    docTopicCounter, dData, currentTopic)
 
-              if (newTopic != currentTopic) {
-                topics(i) = newTopic
+                  if (newTopic != currentTopic) {
+                    topics(i) = newTopic
+                    docTopicCounter(currentTopic) -= 1
+                    docTopicCounter(newTopic) += 1
+                    if (docTopicCounter(currentTopic) == 0) docTopicCounter.compact()
+
+                    termTopicCounter(currentTopic) -= 1
+                    termTopicCounter(newTopic) += 1
+                    if (termTopicCounter(currentTopic) == 0) termTopicCounter.compact()
+
+                    totalTopicCounter(currentTopic) -= 1
+                    totalTopicCounter(newTopic) += 1
+                    if (gen.nextDouble() < 1e-5) {
+                      wordTableCache.update(termId, null)
+                    }
+                  }
+                }
               }
             }
 
@@ -664,7 +675,7 @@ private class DBHPartitioner(partitions: Int) extends Partitioner {
   override def hashCode: Int = numPartitions
 }
 
-class LDAKryoRegistrator extends KryoRegistrator {
+private[mllib] class LDAKryoRegistrator extends KryoRegistrator {
   def registerClasses(kryo: com.esotericsoftware.kryo.Kryo) {
     val gkr = new GraphKryoRegistrator
     gkr.registerClasses(kryo)
