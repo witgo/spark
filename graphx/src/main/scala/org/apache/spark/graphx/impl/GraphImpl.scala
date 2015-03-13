@@ -26,8 +26,6 @@ import org.apache.spark.storage.StorageLevel
 import org.apache.spark.graphx._
 import org.apache.spark.graphx.impl.GraphImpl._
 import org.apache.spark.graphx.util.BytecodeUtils
-
-
 /**
  * An implementation of [[org.apache.spark.graphx.Graph]] to support computation on graphs.
  *
@@ -35,9 +33,9 @@ import org.apache.spark.graphx.util.BytecodeUtils
  * routing information for shipping vertex attributes to edge partitions, and
  * `replicatedVertexView`, which contains edges and the vertex attributes mentioned by each edge.
  */
-class GraphImpl[VD: ClassTag, ED: ClassTag] protected (
-    @transient val vertices: VertexRDD[VD],
-    @transient val replicatedVertexView: ReplicatedVertexView[VD, ED])
+class GraphImpl[VD: ClassTag, ED: ClassTag] protected(
+  @transient val vertices: VertexRDD[VD],
+  @transient val replicatedVertexView: ReplicatedVertexView[VD, ED])
   extends Graph[VD, ED] with Serializable {
 
   /** Default constructor is provided to support serialization */
@@ -86,24 +84,234 @@ class GraphImpl[VD: ClassTag, ED: ClassTag] protected (
     partitionBy(partitionStrategy, edges.partitions.size)
   }
 
-  override def partitionBy(
-      partitionStrategy: PartitionStrategy, numPartitions: Int): Graph[VD, ED] = {
+  override def partitionBy(partitionStrategy: PartitionStrategy, numPartitions: Int): Graph[VD, ED] = {
+    partitionBy(partitionStrategy, numPartitions, 70)
+  }
+
+  def partitionBy(
+    partitionStrategy: PartitionStrategy,
+    numPartitions: Int,
+    ThreshHold: Int = 70): Graph[VD, ED] = {
+    // strategy
     val edTag = classTag[ED]
     val vdTag = classTag[VD]
-    val newEdges = edges.withPartitionsRDD(edges.map { e =>
-      val part: PartitionID = partitionStrategy.getPartition(e.srcId, e.dstId, numPartitions)
-      (part, (e.srcId, e.dstId, e.attr))
-    }
-      .partitionBy(new HashPartitioner(numPartitions))
-      .mapPartitionsWithIndex( { (pid, iter) =>
-        val builder = new EdgePartitionBuilder[ED, VD]()(edTag, vdTag)
-        iter.foreach { message =>
-          val data = message._2
-          builder.add(data._1, data._2, data._3)
+    var newEdges = partitionStrategy match {
+      case PartitionStrategy.BiDstCut => {
+        val groupE = edges.map { e => (e.dstId, e.srcId)}.groupByKey
+        val count_map = groupE.map { e =>
+          var arr = new Array[Long](numPartitions)
+          e._2.map { v => arr((v % numPartitions).toInt) += 1}
+          (e._1, arr)
         }
-        val edgePartition = builder.toEdgePartition
-        Iterator((pid, edgePartition))
-      }, preservesPartitioning = true)).cache()
+        var proc_num_edges = new Array[Long](numPartitions)
+        val mht = count_map.map { e =>
+          val k = e._1
+          val v = e._2
+          var best_proc: PartitionID = (k % numPartitions).toInt
+          var best_score: Double = v.apply(best_proc) - math.sqrt(1.0 * proc_num_edges(best_proc))
+          for (i <- 0 to numPartitions - 1) {
+            val score: Double = v.apply(i) - math.sqrt(1.0 * proc_num_edges(i))
+            if (score > best_score) {
+              best_proc = i
+              best_score = score
+            }
+          }
+          for (i <- 0 to numPartitions - 1) {
+            proc_num_edges(best_proc) += v.apply(i)
+          }
+          (k, best_proc)
+        }
+
+        val combine_rdd = (edges.map { e => (e.dstId, (e.srcId, e.attr))}).join(mht.map { e => (e._1, e._2)})
+        edges.withPartitionsRDD(combine_rdd.map { e =>
+          (e._2._2, (e._1, e._2._1._1, e._2._1._2))
+        }
+          .partitionBy(new HashPartitioner(numPartitions))
+          .mapPartitionsWithIndex({ (pid, iter) =>
+          val builder = new EdgePartitionBuilder[ED, VD]()(edTag, vdTag)
+          iter.foreach { message =>
+            val data = message._2
+            builder.add(data._1, data._2, data._3)
+          }
+          val edgePartition = builder.toEdgePartition
+          Iterator((pid, edgePartition))
+        }, preservesPartitioning = true)).cache()
+      }
+
+      case PartitionStrategy.BiSrcCut => {
+        val groupE = edges.map { e => (e.srcId, e.dstId)}.groupByKey
+        val count_map = groupE.map { e =>
+          var arr = new Array[Long](numPartitions)
+          e._2.map { v => arr((v % numPartitions).toInt) += 1}
+          (e._1, arr)
+        }
+        var proc_num_edges = new Array[Long](numPartitions)
+        val mht = count_map.map { e =>
+          val k = e._1
+          val v = e._2
+          var best_proc: PartitionID = (k % numPartitions).toInt
+          var best_score: Double = v.apply(best_proc) - math.sqrt(1.0 * proc_num_edges(best_proc))
+          for (i <- 0 to numPartitions - 1) {
+            val score: Double = v.apply(i) - math.sqrt(1.0 * proc_num_edges(i))
+            if (score > best_score) {
+              best_proc = i
+              best_score = score
+            }
+          }
+          for (i <- 0 to numPartitions - 1) {
+            proc_num_edges(best_proc) += v.apply(i)
+          }
+          (k, best_proc)
+        }
+
+        val combine_rdd = (edges.map { e => (e.srcId, (e.dstId, e.attr))}).join(mht.map { e => (e._1, e._2)})
+        edges.withPartitionsRDD(combine_rdd.map { e =>
+          (e._2._2, (e._1, e._2._1._1, e._2._1._2))
+          // new MessageToPartition(e._2._2, (e._1, e._2._1._1, e._2._1._2))
+        }
+          .partitionBy(new HashPartitioner(numPartitions))
+          .mapPartitionsWithIndex({ (pid, iter) =>
+          val builder = new EdgePartitionBuilder[ED, VD]()(edTag, vdTag)
+          iter.foreach { message =>
+            val data = message._2
+            builder.add(data._1, data._2, data._3)
+          }
+          val edgePartition = builder.toEdgePartition
+          Iterator((pid, edgePartition))
+        }, preservesPartitioning = true)).cache()
+      }
+
+      // it's actually HybridCut plus Edge2D (Grid)
+      case PartitionStrategy.HybridCutPlus => {
+        // val inDegrees: VertexRDD[Int] = this.inDegrees
+        val LookUpTable0 = edges.map(e => (e.dstId, (e.srcId, e.attr))).join(this.degrees.map(e => (e._1, e._2)))
+        // (dstId, ( (srcId, attr), (Total Degree Count of dst) ))
+        val LookUpTable1 = LookUpTable0.map(e => (e._2._1._1, (e._1, e._2._1._2,
+          e._2._2))).join(this.degrees.map(e => (e._1, e._2)))
+        // (srcID, ((dstId, attr, dstDegreeCount), srcDegreeCount) )
+
+        edges.withPartitionsRDD(LookUpTable1.map { e =>
+
+          var part: PartitionID = 0
+          val srcId = e._1
+          val dstId = e._2._1._1
+          val attr = e._2._1._2
+          val srcDegreeCount = e._2._2
+          val dstDegreeCount = e._2._1._3
+          val numParts = numPartitions
+
+          val mixingPrime: VertexId = 1125899906842597L
+          var flag: Boolean = true
+          // high high : 2D
+          if (srcDegreeCount > ThreshHold && dstDegreeCount > ThreshHold) {
+            part = PartitionStrategy.EdgePartition2D.getPartition(srcId, dstId, numPartitions)
+            flag = false
+          }
+          // high low : Low
+          if (flag && srcDegreeCount > ThreshHold) {
+            part = ((math.abs(dstId) * mixingPrime) % numParts).toInt
+            flag = false
+          }
+          // low high : Low
+          if (flag && dstDegreeCount > ThreshHold) {
+            part = ((math.abs(srcId) * mixingPrime) % numParts).toInt
+            flag = false
+          }
+          // low low : 2D
+          if (flag) {
+            part = PartitionStrategy.EdgePartition2D.getPartition(srcId, dstId, numPartitions)
+          }
+
+          // Should we be using 3-tuple or an optimized class
+          // new MessageToPartition(part, (srcId, dstId, attr))
+          (part, (srcId, dstId, attr))
+        }
+          .partitionBy(new HashPartitioner(numPartitions))
+          .mapPartitionsWithIndex({ (pid, iter) =>
+          val builder = new EdgePartitionBuilder[ED, VD]()(edTag, vdTag)
+          iter.foreach { message =>
+            val data = message._2
+            builder.add(data._1, data._2, data._3)
+          }
+          val edgePartition = builder.toEdgePartition
+          Iterator((pid, edgePartition))
+        }, preservesPartitioning = true)).cache()
+      }
+
+      case PartitionStrategy.HybridCut => {
+        // val inDegrees: VertexRDD[Int] = this.inDegrees
+        val LookUpTable = edges.map(e => (e.dstId, (e.srcId, e.attr)))
+          .join(this.inDegrees.map(e => (e._1, e._2)))
+          .partitionBy(new HashPartitioner(numPartitions))
+        val ret = edges.withPartitionsRDD(LookUpTable.map { e =>
+
+          var part: PartitionID = 0
+          val srcId = e._2._1._1
+          val dstId = e._1
+          val attr = e._2._1._2
+          val DegreeCount = e._2._2
+          val numParts = numPartitions
+
+          val mixingPrime: VertexId = 1125899906842597L
+          // val DegreeCount : Int = inDegrees.lookup(dst).head
+          if (DegreeCount > ThreshHold) {
+            // high-cut
+            // hash code
+            //part = (math.abs(srcId).hashCode % numParts).toInt
+            part = ((math.abs(srcId) * mixingPrime) % numParts).toInt
+          } else {
+            // low-cut
+            // hash code
+            //part = (math.abs(dstId).hashCode % numParts).toInt
+            part = ((math.abs(dstId) * mixingPrime) % numParts).toInt
+          }
+
+          // Should we be using 3-tuple or an optimized class
+          // new MessageToPartition(part, (srcId, dstId, attr))
+          (part, (srcId, dstId, attr))
+        }
+          .partitionBy(new HashPartitioner(numPartitions))
+          .mapPartitionsWithIndex({ (pid, iter) =>
+          val builder = new EdgePartitionBuilder[ED, VD]()(edTag, vdTag)
+          iter.foreach { message =>
+            val data = message._2
+            builder.add(data._1, data._2, data._3)
+          }
+          val edgePartition = builder.toEdgePartition
+          Iterator((pid, edgePartition))
+        }, preservesPartitioning = true)).cache()
+        LookUpTable.unpersist()
+        ret
+      }
+      case _ => {
+        // Default = true
+        // add same overhead?
+        //val LookUpTable = edges.map(e => (e.dstId, (e.srcId, e.attr))).join(this.inDegrees.map(e => (e._1, e._2)))
+        //edges.withPartitionsRDD( LookUpTable.map { e =>
+        //val srcId = e._2._1._1
+        //val dstId = e._1
+        //val attr = e._2._1._2
+        edges.withPartitionsRDD(edges.map { e =>
+          val part: PartitionID = partitionStrategy.getPartition(e.srcId, e.dstId, numPartitions)
+          //val part: PartitionID = partitionStrategy.getPartition(srcId, dstId, numPartitions)
+
+          // Should we be using 3-tuple or an optimized class
+          (part, (e.srcId, e.dstId, e.attr))
+          //(part, (srcId, dstId, attr))
+        }
+          .partitionBy(new HashPartitioner(numPartitions))
+          .mapPartitionsWithIndex({ (pid, iter) =>
+          val builder = new EdgePartitionBuilder[ED, VD]()(edTag, vdTag)
+          iter.foreach { message =>
+            val data = message._2
+            builder.add(data._1, data._2, data._3)
+          }
+          val edgePartition = builder.toEdgePartition
+          Iterator((pid, edgePartition))
+        }, preservesPartitioning = true)).cache()
+      }
+    }
+
     GraphImpl.fromExistingRDDs(vertices.withEdges(newEdges), newEdges)
   }
 

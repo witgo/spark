@@ -99,7 +99,7 @@ class GraphSuite extends FunSuite with LocalSparkContext {
       // partitionBy(RandomVertexCut) puts identical edges in the same partition
       assert(nonemptyParts(mkGraph(identicalEdges).partitionBy(RandomVertexCut)).count === 1)
       // partitionBy(EdgePartition1D) puts same-source edges in the same partition
-      assert(nonemptyParts(mkGraph(sameSrcEdges).partitionBy(EdgePartition1D)).count === 1)
+      assert(nonemptyParts(mkGraph(sameSrcEdges).partitionBy(EdgePartition1DSrc)).count === 1)
       // partitionBy(CanonicalRandomVertexCut) puts edges that are identical modulo direction into
       // the same partition
       assert(nonemptyParts(mkGraph(canonicalEdges).partitionBy(CanonicalRandomVertexCut)).count === 1)
