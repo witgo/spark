@@ -145,7 +145,7 @@ class LDA private[mllib](
 
     val counterCorpus = updateCounter(sampledCorpus, numTopics)
     counterCorpus.persist(storageLevel)
-    counterCorpus.vertices.count()
+    // counterCorpus.vertices.count()
     counterCorpus.edges.count()
     totalTopicCounter = collectTotalTopicCounter(counterCorpus)
 
