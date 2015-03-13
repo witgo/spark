@@ -293,6 +293,35 @@ object LDA {
     topicModeling.saveModel(1)
   }
 
+  /**
+   * topicID  termID+1:counter termID+1:counter ..
+   */
+  def trainAndSaveModel(
+    docs: RDD[(DocId, SSV)],
+    dir: String,
+    numTopics: Int = 2048,
+    totalIter: Int = 150,
+    alpha: Double = 0.01,
+    beta: Double = 0.01,
+    alphaAS: Double = 0.1): Unit = {
+    import org.apache.spark.mllib.regression.LabeledPoint
+    import org.apache.spark.mllib.util.MLUtils
+    import org.apache.spark.mllib.linalg.Vectors
+    val lda = new LDA(docs, numTopics, alpha, beta, alphaAS)
+    val numTerms = lda.numTerms
+    lda.runGibbsSampling(totalIter)
+    val rdd = lda.termVertices.flatMap { case (termId, counter) =>
+      counter.activeIterator.map { case (topic, cn) =>
+        val sv = BSV.zeros[Double](numTerms)
+        sv(termId.toInt) = cn.toDouble
+        (topic, sv)
+      }
+    }.reduceByKey { (a, b) => a + b}.map { case (topic, sv) =>
+      LabeledPoint(topic.toDouble, Vectors.fromBreeze(sv))
+    }
+    MLUtils.saveAsLibSVMFile(rdd, dir)
+  }
+
   private[mllib] def sampleTokens(
     graph: Graph[VD, ED],
     totalTopicCounter: BDV[Count],
@@ -345,8 +374,6 @@ object LDA {
 
                     totalTopicCounter(currentTopic) -= 1
                     totalTopicCounter(newTopic) += 1
-
-
                   }
                   i += 1
                 }
