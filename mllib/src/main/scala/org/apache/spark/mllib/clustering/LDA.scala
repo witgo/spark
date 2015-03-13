@@ -339,8 +339,9 @@ object LDA {
                 termTopicCounter.synchronized {
                   dSparse(totalTopicCounter, termTopicCounter, docTopicCounter, dData,
                     currentTopic, numTokens, numTerms, alpha, alphaAS, beta)
-                  val (wSum, w) = wordTable(wordTableCache, totalTopicCounter,
-                    termTopicCounter, termId, numTokens, numTerms, alpha, alphaAS, beta)
+                  val (wSum, w) = wordTable(x => x == null || x.get() == null || gen.nextDouble() < 1e-4,
+                    wordTableCache, totalTopicCounter, termTopicCounter,
+                    termId, numTokens, numTerms, alpha, alphaAS, beta)
                   val newTopic = tokenSampling(gen, t, tSum, w, termTopicCounter, wSum,
                     docTopicCounter, dData, currentTopic)
 
@@ -356,9 +357,6 @@ object LDA {
 
                     totalTopicCounter(currentTopic) -= 1
                     totalTopicCounter(newTopic) += 1
-                    if (gen.nextDouble() < 1e-5) {
-                      wordTableCache.update(termId, null)
-                    }
                   }
                 }
               }
@@ -608,6 +606,7 @@ object LDA {
   }
 
   private def wordTable(
+    updateFunc: SoftReference[(Double, Table)] => Boolean,
     cacheMap: AppendOnlyMap[VertexId, SoftReference[(Double, Table)]],
     totalTopicCounter: BDV[Count],
     termTopicCounter: VD,
@@ -617,14 +616,16 @@ object LDA {
     alpha: Double,
     alphaAS: Double,
     beta: Double): (Double, Table) = {
-    var w = cacheMap(termId)
-    if (w == null || w.get() == null) {
-      val t = wSparse(totalTopicCounter, termTopicCounter,
+    val cacheW = cacheMap(termId)
+    if (!updateFunc(cacheW)) {
+      cacheW.get
+    } else {
+      val sv = wSparse(totalTopicCounter, termTopicCounter,
         numTokens, numTerms, alpha, alphaAS, beta)
-      w = new SoftReference((t._1, generateAlias(t._2, t._1)))
-      cacheMap.update(termId, w)
+      val w = (sv._1, generateAlias(sv._2, sv._1))
+      cacheMap.update(termId, new SoftReference(w))
+      w
     }
-    w.get()
   }
 
   private def sampleSV(gen: Random, table: Table, sv: VD, currentTopic: Int): Int = {
