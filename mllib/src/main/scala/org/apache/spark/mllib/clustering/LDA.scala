@@ -128,7 +128,7 @@ class LDA private[mllib](
 
     val counterCorpus = updateCounter(sampledCorpus, numTopics)
     counterCorpus.persist(storageLevel)
-    counterCorpus.vertices.count()
+    // counterCorpus.vertices.count()
     counterCorpus.edges.count()
     totalTopicCounter = collectTotalTopicCounter(counterCorpus)
 
@@ -172,7 +172,7 @@ class LDA private[mllib](
 
   def runGibbsSampling(iterations: Int): Unit = {
     for (iter <- 1 to iterations) {
-      // println(s"perplexity $iter: ${perplexity()}")
+      // println(s"perplexity $iter:                 ${perplexity}")
       logInfo(s"Start Gibbs sampling (Iteration $iter/$iterations)")
       gibbsSampling()
     }
