@@ -190,7 +190,7 @@ class LDA private[mllib](
 
   def runGibbsSampling(iterations: Int): Unit = {
     for (iter <- 1 to iterations) {
-      // println(s"perplexity $iter: ${perplexity()}")
+      // println(s"perplexity $iter:                 ${perplexity}")
       logInfo(s"Start Gibbs sampling (Iteration $iter/$iterations)")
       gibbsSampling()
     }
@@ -369,15 +369,12 @@ object LDA {
               wD = generateAlias(dv._2, wDSum)
             }
             val (dSum, d) = docTopicCounter.synchronized {
-              docTable(x => {
-                x == null || x.get() == null || gen.nextDouble() < 1e-2
-              }, docTableCache, docTopicCounter, docId)
+              docTable(x => x == null || x.get() == null || gen.nextDouble() < 1e-2,
+                docTableCache, docTopicCounter, docId)
             }
             val (wSum, w) = termTopicCounter.synchronized {
-              wordTable(x => {
-                x == null || x.get() == null || gen.nextDouble() < 1e-4
-              }, wordTableCache, totalTopicCounter,
-                termTopicCounter, termId, numTerms, beta)
+              wordTable(x => x == null || x.get() == null || gen.nextDouble() < 1e-4,
+                wordTableCache, totalTopicCounter, termTopicCounter, termId, numTerms, beta)
             }
             for (i <- 0 until topics.length) {
               var docProposal = gen.nextDouble() < 0.5
@@ -412,6 +409,7 @@ object LDA {
 
                 assert(newTopic >= 0 && newTopic < numTopics)
                 if (newTopic != currentTopic) {
+                  topics(i) = newTopic
                   docTopicCounter.synchronized {
                     docTopicCounter(currentTopic) -= 1
                     docTopicCounter(newTopic) += 1
@@ -422,8 +420,6 @@ object LDA {
                   }
                   totalTopicCounter(currentTopic) -= 1
                   totalTopicCounter(newTopic) += 1
-
-                  topics(i) = newTopic
                 }
 
               }
