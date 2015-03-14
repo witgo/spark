@@ -378,11 +378,11 @@ object LDA {
                     topics(i) = newTopic
                     docTopicCounter(currentTopic) -= 1
                     docTopicCounter(newTopic) += 1
-                    if (docTopicCounter(currentTopic) == 0) docTopicCounter.compact()
+                    // if (docTopicCounter(currentTopic) == 0) docTopicCounter.compact()
 
                     termTopicCounter(currentTopic) -= 1
                     termTopicCounter(newTopic) += 1
-                    if (termTopicCounter(currentTopic) == 0) termTopicCounter.compact()
+                    // if (termTopicCounter(currentTopic) == 0) termTopicCounter.compact()
 
                     totalTopicCounter(currentTopic) -= 1
                     totalTopicCounter(newTopic) += 1
@@ -406,9 +406,17 @@ object LDA {
       }
       ctx.sendToDst(vector)
       ctx.sendToSrc(vector)
-    }, _ + _, TripletFields.EdgeOnly).mapValues(t => {
-      t.compact()
-      t
+    }, _ + _, TripletFields.EdgeOnly).mapValues(v => {
+      val used = v.used
+      if (v.index.length == used) {
+        v
+      } else {
+        val index = new Array[Int](used)
+        val data = new Array[Count](used)
+        Array.copy(v.index, 0, index, 0, used)
+        Array.copy(v.data, 0, data, 0, used)
+        new BSV[Count](index, data, numTopics)
+      }
     })
     graph.joinVertices(newCounter)((_, _, nc) => nc)
   }
@@ -586,7 +594,7 @@ object LDA {
     val betaSum = numTerms * beta
     val w = BSV.zeros[Double](numTopics)
     var sum = 0.0
-    termTopicCounter.activeIterator.foreach { t =>
+    termTopicCounter.activeIterator.filter(_._2 > 0).foreach { t =>
       val topic = t._1
       val count = t._2
       val last = count * alphaSum * (totalTopicCounter(topic) + alphaAS) /
@@ -622,12 +630,12 @@ object LDA {
     var sum = 0.0
     for (i <- 0 until used) {
       val topic = index(i)
-      var count: Double = data(i)
-      if (currentTopic == topic) count = count - 1.0
-      // val last = count * termSum * (termTopicCounter(topic) + beta) /
-      //  ((totalTopicCounter(topic) + betaSum) * termSum)
-      val last = count * (termTopicCounter(topic) + beta) /
-        (totalTopicCounter(topic) + betaSum)
+      val count = data(i)
+      val adjustment = if (currentTopic == topic) -1D else 0
+      val last = (count + adjustment) * (termTopicCounter(topic) + adjustment + beta) /
+        (totalTopicCounter(topic) + adjustment + betaSum)
+      // val lastD = (count + adjustment) * termSum * (termTopicCounter(topic) + adjustment + beta) /
+      //  ((totalTopicCounter(topic) + adjustment + betaSum) * termSum)
 
       sum += last
       d(i) = sum
