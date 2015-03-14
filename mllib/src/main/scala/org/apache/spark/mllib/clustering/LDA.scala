@@ -290,6 +290,35 @@ object LDA {
     topicModeling.saveModel(1)
   }
 
+  /**
+   * topicID termID+1:counter termID+1:counter ..
+   */
+  def trainAndSaveModel(
+    docs: RDD[(DocId, SSV)],
+    dir: String,
+    numTopics: Int = 2048,
+    totalIter: Int = 150,
+    alpha: Double = 0.01,
+    beta: Double = 0.01,
+    alphaAS: Double = 0.1): Unit = {
+    import org.apache.spark.mllib.regression.LabeledPoint
+    import org.apache.spark.mllib.util.MLUtils
+    import org.apache.spark.mllib.linalg.Vectors
+    val lda = new LDA(docs, numTopics, alpha, beta, alphaAS)
+    val numTerms = lda.numTerms
+    lda.runGibbsSampling(totalIter)
+    val rdd = lda.termVertices.flatMap { case (termId, counter) =>
+      counter.activeIterator.map { case (topic, cn) =>
+        val sv = BSV.zeros[Double](numTerms)
+        sv(termId.toInt) = cn.toDouble
+        (topic, sv)
+      }
+    }.reduceByKey { (a, b) => a + b}.map { case (topic, sv) =>
+      LabeledPoint(topic.toDouble, Vectors.fromBreeze(sv))
+    }
+    MLUtils.saveAsLibSVMFile(rdd, dir)
+  }
+
   def incrementalTrain(docs: RDD[(DocId, SSV)],
     computedModel: LDAModel,
     alphaAS: Double = 1,
@@ -488,7 +517,7 @@ object LDA {
    * -di 减去当前token的主题
    */
   // scalastyle:on
-  def tokenSampling(
+  private  def tokenSampling(
     gen: Random,
     t: Table,
     tSum: Double,
