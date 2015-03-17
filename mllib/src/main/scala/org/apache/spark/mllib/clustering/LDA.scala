@@ -94,7 +94,12 @@ class LDA private[mllib](
     this
   }
 
-  def getCorpus = corpus
+  def getCorpus: Graph[VD, ED] = corpus
+
+  def setCorpus(newDorpus: Graph[VD, ED]): this.type = {
+    this.corpus = newDorpus
+    this
+  }
 
   // scalastyle:on
 
@@ -441,8 +446,10 @@ object LDA {
     var corpus: Graph[VD, ED] = Graph.fromEdges(edges, null, storageLevel, storageLevel)
     // degree-based hashing
     val degrees = corpus.outerJoinVertices(corpus.degrees) { (vid, data, deg) => deg.getOrElse(0)}
+    val threshold = (degrees.vertices.map(_._2.toDouble).sum() / (2.0 * degrees.vertices.count())).toInt
+    println(s"threshold $threshold")
     val numPartitions = edges.partitions.size
-    val partitionStrategy = new DBHPartitioner(numPartitions)
+    val partitionStrategy = new DBHPartitioner(numPartitions, threshold)
     val newEdges = degrees.triplets.map { e =>
       (partitionStrategy.getPartition(e), Edge(e.srcId, e.dstId, e.attr))
     }.partitionBy(new HashPartitioner(numPartitions)).map(_._2)
@@ -517,7 +524,7 @@ object LDA {
    * -di 减去当前token的主题
    */
   // scalastyle:on
-  private  def tokenSampling(
+  private def tokenSampling(
     gen: Random,
     t: Table,
     tSum: Double,
@@ -679,7 +686,7 @@ object LDA {
  * http://nips.cc/Conferences/2014/Program/event.php?ID=4569
  * @param partitions
  */
-private class DBHPartitioner(partitions: Int) extends Partitioner {
+private class DBHPartitioner(val partitions: Int, val threshold: Int = 70) extends Partitioner {
   val mixingPrime: Long = 1125899906842597L
 
   def numPartitions = partitions
@@ -687,10 +694,18 @@ private class DBHPartitioner(partitions: Int) extends Partitioner {
   def getPartition(key: Any): Int = {
     val edge = key.asInstanceOf[EdgeTriplet[Int, ED]]
     val idx = math.min(edge.srcAttr, edge.dstAttr)
-    getPartition(idx)
+    if (idx < threshold) {
+      getPartition(edge.dstId)
+    } else {
+      getPartition(idx)
+    }
   }
 
   def getPartition(idx: Int): PartitionID = {
+    getPartition(idx.toLong)
+  }
+
+  def getPartition(idx: Long): PartitionID = {
     (math.abs(idx * mixingPrime) % partitions).toInt
   }
 
