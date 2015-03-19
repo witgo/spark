@@ -88,7 +88,7 @@ class GraphImpl[VD: ClassTag, ED: ClassTag] protected(
     partitionBy(partitionStrategy, numPartitions, 70)
   }
 
-  def partitionBy(
+  override def partitionBy(
     partitionStrategy: PartitionStrategy,
     numPartitions: Int,
     ThreshHold: Int = 70): Graph[VD, ED] = {

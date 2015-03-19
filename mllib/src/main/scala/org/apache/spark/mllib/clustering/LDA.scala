@@ -112,15 +112,23 @@ class LDA private[mllib](
 
   private def docVertices = corpus.vertices.filter(t => t._1 < 0)
 
-  private def checkpoint(corpus: Graph[VD, ED]): Unit = {
+  private def checkpoint(corpus: Graph[VD, ED]): Graph[VD, ED] = {
     if (innerIter % 10 == 0 && corpus.edges.sparkContext.getCheckpointDir.isDefined) {
+      logInfo(s"start checkpoint")
       corpus.checkpoint()
+      val newVertices = corpus.vertices.mapValues(t => t)
+      val newCorpus = GraphImpl(newVertices, corpus.edges)
+      newCorpus.checkpoint()
+      logInfo(s"end checkpoint")
+      newCorpus
+    } else {
+      corpus
     }
   }
 
   private def collectTotalTopicCounter(graph: Graph[VD, ED]): BDV[Count] = {
     val globalTopicCounter = collectGlobalCounter(graph, numTopics)
-    assert(brzSum(globalTopicCounter) == numTokens)
+    // assert(brzSum(globalTopicCounter) == numTokens)
     globalTopicCounter
   }
 
@@ -130,7 +138,6 @@ class LDA private[mllib](
     sampledCorpus.persist(storageLevel)
 
     val counterCorpus = updateCounter(sampledCorpus, numTopics)
-    checkpoint(counterCorpus)
     counterCorpus.persist(storageLevel)
     counterCorpus.vertices.count()
     counterCorpus.edges.count()
@@ -140,7 +147,9 @@ class LDA private[mllib](
     corpus.vertices.unpersist(false)
     sampledCorpus.edges.unpersist(false)
     sampledCorpus.vertices.unpersist(false)
-    corpus = counterCorpus
+
+    logInfo(s"end gibbsSampling, iter $innerIter")
+    corpus = checkpoint(counterCorpus)
     innerIter += 1
   }
 
@@ -174,7 +183,11 @@ class LDA private[mllib](
 
   def runGibbsSampling(iterations: Int): Unit = {
     for (iter <- 1 to iterations) {
-      // println(s"perplexity $iter: ${perplexity()}")
+      if (iter < 20 && iter % 2 == 0) {
+        println(s"perplexity $iter: ${perplexity}")
+      } else if (iter > 20 && iter % 5 == 0) {
+        println(s"perplexity $iter: ${perplexity}")
+      }
       logInfo(s"Start Gibbs sampling (Iteration $iter/$iterations)")
       gibbsSampling()
     }
@@ -218,6 +231,7 @@ class LDA private[mllib](
    */
   // scalastyle:on
   def perplexity(): Double = {
+    logInfo(s"start perplexity computing")
     val totalTopicCounter = this.totalTopicCounter
     val numTopics = this.numTopics
     val numTerms = this.numTerms
@@ -268,6 +282,7 @@ class LDA private[mllib](
       docTermSize * Math.log(prob)
     }.edges.map(t => t.attr).sum()
 
+    logInfo(s"end perplexity computing")
     math.exp(-1 * termProb / totalSize)
   }
 }
@@ -414,7 +429,7 @@ object LDA {
       t.compact()
       t
     })
-    // GraphImpl.fromExistingRDDs(newCounter, graph.edges)
+    // graph.joinVertices(newCounter)((_, _, nc) => nc)
     GraphImpl(newCounter, graph.edges)
   }
 
@@ -444,8 +459,12 @@ object LDA {
     var corpus: Graph[VD, ED] = Graph.fromEdges(edges, null, storageLevel, storageLevel)
     // degree-based hashing
     val degrees = corpus.outerJoinVertices(corpus.degrees) { (vid, data, deg) => deg.getOrElse(0) }
-    val threshold = (degrees.vertices.map(_._2.toDouble).sum() / (2.0 * degrees.vertices.count())).toInt
+    // val threshold = (degrees.vertices.map(_._2.toDouble).sum() /
+    //   (2.0 * degrees.vertices.count())).ceil.toInt
+    val threshold = (degrees.vertices.map(_._2.toDouble).sum() / (2.0 * corpus.vertices.filter(
+      t => t._1 < 0).count())).ceil.toInt
     println(s"threshold $threshold")
+
     val numPartitions = edges.partitions.size
     val partitionStrategy = new DBHPartitioner(numPartitions, threshold)
     val newEdges = degrees.triplets.map { e =>
@@ -453,7 +472,8 @@ object LDA {
     }.partitionBy(new HashPartitioner(numPartitions)).map(_._2)
     corpus = Graph.fromEdges(newEdges, null, storageLevel, storageLevel)
     // end degree-based hashing
-    // corpus = corpus.partitionBy(PartitionStrategy.EdgePartition2D)
+
+    //corpus = corpus.partitionBy(PartitionStrategy.HybridCut, 144, threshold)
     corpus = updateCounter(corpus, numTopics).cache()
     corpus.vertices.count()
     corpus.edges.count()
@@ -691,12 +711,20 @@ private class DBHPartitioner(val partitions: Int, val threshold: Int = 70) exten
 
   def getPartition(key: Any): Int = {
     val edge = key.asInstanceOf[EdgeTriplet[Int, ED]]
-    val idx = math.min(edge.srcAttr, edge.dstAttr)
-    if (idx < threshold) {
-      getPartition(edge.dstId)
+    val idMin = math.min(edge.srcAttr, edge.dstAttr)
+    val idMax = math.max(edge.srcAttr, edge.dstAttr)
+    if (idMax < threshold) {
+      getPartition(idMax)
     } else {
-      getPartition(idx)
+      getPartition(idMin)
     }
+    /*
+      if (idx < threshold) {
+        getPartition(edge.dstId)
+      } else {
+        getPartition(idx)
+      }
+    */
   }
 
   def getPartition(idx: Int): PartitionID = {
