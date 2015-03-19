@@ -24,6 +24,7 @@ import breeze.linalg.{DenseVector => BDV, SparseVector => BSV, sum => brzSum}
 
 import org.apache.spark.broadcast.Broadcast
 import org.apache.spark.graphx._
+import org.apache.spark.graphx.impl.GraphImpl
 import org.apache.spark.{HashPartitioner, Logging, Partitioner}
 import org.apache.spark.mllib.linalg.distributed.{MatrixEntry, RowMatrix}
 import org.apache.spark.mllib.linalg.{DenseVector => SDV, SparseVector => SSV, Vector => SV}
@@ -106,12 +107,9 @@ class LDA private[mllib](
 
   private def docVertices = corpus.vertices.filter(t => t._1 < 0)
 
-  private def checkpoint(): Unit = {
+  private def checkpoint(corpus: Graph[VD, ED]): Unit = {
     if (innerIter % 10 == 0 && corpus.edges.sparkContext.getCheckpointDir.isDefined) {
-      val edges = corpus.edges.map(t => t)
-      edges.checkpoint()
-      val newCorpus: Graph[VD, ED] = Graph.fromEdges(edges, null, storageLevel, storageLevel)
-      corpus = updateCounter(newCorpus, numTopics).persist(storageLevel)
+      corpus.checkpoint()
     }
   }
 
@@ -127,6 +125,7 @@ class LDA private[mllib](
     sampledCorpus.persist(storageLevel)
 
     val counterCorpus = updateCounter(sampledCorpus, numTopics)
+    checkpoint(counterCorpus)
     counterCorpus.persist(storageLevel)
     // counterCorpus.vertices.count()
     counterCorpus.edges.count()
@@ -137,8 +136,6 @@ class LDA private[mllib](
     sampledCorpus.edges.unpersist(false)
     sampledCorpus.vertices.unpersist(false)
     corpus = counterCorpus
-
-    checkpoint()
     innerIter += 1
   }
 
@@ -172,9 +169,13 @@ class LDA private[mllib](
 
   def runGibbsSampling(iterations: Int): Unit = {
     for (iter <- 1 to iterations) {
-      // println(s"perplexity $iter:                 ${perplexity}")
-      logInfo(s"Start Gibbs sampling (Iteration $iter/$iterations)")
+      // logInfo(s"Gibbs samplin perplexity $iter:                 ${perplexity}")
+      // logInfo(s"Gibbs sampling (Iteration $iter/$iterations)")
+      // val startedAt = System.nanoTime()
       gibbsSampling()
+      // val endAt = System.nanoTime()
+      // val useTime = (endAt - startedAt) / 1e9
+      // logInfo(s"Gibbs sampling use time  $iter:              $useTime")
     }
   }
 
@@ -313,7 +314,7 @@ object LDA {
         sv(termId.toInt) = cn.toDouble
         (topic, sv)
       }
-    }.reduceByKey { (a, b) => a + b}.map { case (topic, sv) =>
+    }.reduceByKey { (a, b) => a + b }.map { case (topic, sv) =>
       LabeledPoint(topic.toDouble, Vectors.fromBreeze(sv))
     }
     MLUtils.saveAsLibSVMFile(rdd, dir)
@@ -418,7 +419,8 @@ object LDA {
         new BSV[Count](index, data, numTopics)
       }
     })
-    graph.joinVertices(newCounter)((_, _, nc) => nc)
+    // GraphImpl.fromExistingRDDs(newCounter, graph.edges)
+    GraphImpl(newCounter, graph.edges)
   }
 
   private def collectGlobalCounter(graph: Graph[VD, ED], numTopics: Int): BDV[Count] = {
@@ -446,7 +448,7 @@ object LDA {
     edges.persist(storageLevel)
     var corpus: Graph[VD, ED] = Graph.fromEdges(edges, null, storageLevel, storageLevel)
     // degree-based hashing
-    val degrees = corpus.outerJoinVertices(corpus.degrees) { (vid, data, deg) => deg.getOrElse(0)}
+    val degrees = corpus.outerJoinVertices(corpus.degrees) { (vid, data, deg) => deg.getOrElse(0) }
     val numPartitions = edges.partitions.size
     val partitionStrategy = new DBHPartitioner(numPartitions)
     val newEdges = degrees.triplets.map { e =>
