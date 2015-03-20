@@ -22,7 +22,7 @@ import breeze.linalg.
 import breeze.numerics.{sigmoid => Bsigmoid}
 
 import org.apache.spark.mllib.linalg.{Vector, Vectors}
-import org.apache.spark.mllib.optimization.{Updater, LBFGS, Gradient}
+import org.apache.spark.mllib.optimization.{GradientDescent, Updater, LBFGS, Gradient}
 import org.apache.spark.rdd.RDD
 import org.apache.spark.util.random.XORShiftRandom
 
@@ -65,20 +65,33 @@ class AffineLayer(numIn: Int, numOut: Int) extends Layer {
 class AffineLayerModel private(w: BDM[Double], b: BDV[Double]) extends LayerModel {
   val size = w.size + b.length
 
+  // TODO: if the last batch != given batch ?
+  private var z: BDM[Double] = null
+  private var d: BDM[Double] = null
+  private var gw: BDM[Double] = null
+  private var gb: BDV[Double] = null
+  private var ones: BDV[Double] = null
+
   override def eval(data: BDM[Double]): BDM[Double] = {
-    val output = w * data
-    output(::, *) :+= b
-    output
+    if (z == null || z.cols != data.cols) z = new BDM[Double](w.rows, data.cols)
+    z(::, *) := b
+    BreezeUtil.dgemm(1.0, w, data, 1.0, z)
+    z
   }
 
-  override def prevDelta(nextDelta: BDM[Double], input: BDM[Double]): BDM[Double] = w.t * nextDelta
+  override def prevDelta(nextDelta: BDM[Double], input: BDM[Double]): BDM[Double] = {
+    if (d == null || d.cols != nextDelta.cols) d = new BDM[Double](w.cols, nextDelta.cols)
+    BreezeUtil.dgemm(1.0, w.t, nextDelta, 0.0, d)
+    d
+  }
 
   override def grad(delta: BDM[Double], input: BDM[Double]): Vector = {
-    val g = delta * input.t
-    g :/= input.cols.toDouble
-    val avgDelta = Bsum(delta(*, ::))
-    avgDelta :/= input.cols.toDouble
-    AffineLayerModel.roll(g, avgDelta)
+    if (gw == null || gw.cols != input.rows) gw = new BDM[Double](delta.rows, input.rows)
+    BreezeUtil.dgemm(1.0 / input.cols, delta, input.t, 0.0, gw)
+    if (gb == null || gb.length != delta.rows) gb = BDV.zeros[Double](delta.rows)
+    if (ones == null || ones.length != delta.cols) ones = BDV.ones[Double](delta.cols)
+    BreezeUtil.gemv(1.0 / input.cols, delta, ones, 0.0, gb)
+    AffineLayerModel.roll(gw, gb)
   }
 
   override def weights(): Vector = AffineLayerModel.roll(w, b)
@@ -181,7 +194,8 @@ object Topology {
     val layers = new Array[Layer]((layerSizes.length - 1) * 2)
     for(i <- 0 until layerSizes.length - 1){
       layers(i * 2) = new AffineLayer(layerSizes(i), layerSizes(i + 1))
-      layers(i * 2 + 1) = new FunctionalLayer(ANNFunctions.Sigmoid, ANNFunctions.SigmoidDerivative)
+      layers(i * 2 + 1) =
+        new FunctionalLayer(ANNFunctions.Sigmoid, ANNFunctions.SigmoidDerivative)
     }
     Topology(layers)
   }
@@ -190,7 +204,8 @@ object Topology {
 /* Model of Feed Forward Neural Network.
 * Implements forward, gradient computation and can return weights in vector format.
 * */
-class FeedForwardModel(val layerModels: Array[LayerModel], val topology: Topology) extends Serializable {
+class FeedForwardModel(val layerModels: Array[LayerModel],
+                       val topology: Topology) extends Serializable {
   def forward(data: BDM[Double]): Array[BDM[Double]] = {
     val outputs = new Array[BDM[Double]](layerModels.length)
     outputs(0) = layerModels(0).eval(data)
@@ -369,6 +384,8 @@ class FeedForwardNetwork private[mllib](topology: Topology, maxNumIterations: In
   private val updater = new ANNUpdater()
   private val optimizer = new LBFGS(gradient, updater).
     setConvergenceTol(convergenceTol).setNumIterations(maxNumIterations)
+//private val optimizer = new GradientDescent(gradient, updater).
+//  setNumIterations(maxNumIterations)
 
   private def run(data: RDD[(Vector, Vector)],
                   initialWeights: Vector): FeedForwardModel = {
