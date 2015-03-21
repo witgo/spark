@@ -220,12 +220,11 @@ class LDA private[mllib](
     minMap
   }
 
-
   // scalastyle:off
   /**
    * 词在所有主题分布和该词所在文本的主题分布乘积: p(w)=\sum_{k}{p(k|d)*p(w|k)}=
-   * \sum_{k}{\frac{{n}_{kw}+{\beta }_{w}} {{n}_{k}+\bar{\beta }} \frac{{n}_{kd}+{\alpha }_{k}} {\sum{{n}_{k}}+\bar{\alpha }}}=
-   * \sum_{k} \frac{{\alpha }_{k}{\beta }_{w}  + {n}_{kw}{\alpha }_{k} + {n}_{kd}{\beta }_{w} + {n}_{kw}{n}_{kd}}{{n}_{k}+\bar{\beta }} \frac{1}{\sum{{n}_{k}}+\bar{\alpha }}}
+   * \sum_{k}{\frac{{n}_{kw}+{\beta }_{w}} {{n}_{k}+\bar{\beta }} \frac{{n}_{kd}+{\alpha }_{k}} {\sum{{n}_{kd}}+\bar{\alpha}}}=
+   * \sum_{k} \frac{{\alpha}_{k}{\beta}_{w} + {n}_{kw}{\alpha}_{k} + {n}_{kd}{\beta}_{w} + {n}_{kw}{n}_{kd}}{{n}_{k}+\bar{\beta}} \frac{1}{\sum{{n}_{kd}}+\bar{\alpha}}}
    * \exp^{-(\sum{\log(p(w))})/N}
    * N为语料库包含的token数
    */
@@ -249,14 +248,14 @@ class LDA private[mllib](
       val probDist = BSV.zeros[Double](numTopics)
       if (vid >= 0) {
         val termTopicCounter = counter
-        // \frac{{n}_{kw}{\alpha }_{k}}{{n}_{k}+\bar{\beta }}
+        // \frac{{n}_{kw}{\alpha}_{k}}{{n}_{k}+\bar{\beta}}
         termTopicCounter.activeIterator.foreach { case (topic, cn) =>
           probDist(topic) = cn * alpha /
             (totalTopicCounter(topic) + numTerms * beta)
         }
       } else {
         val docTopicCounter = counter
-        // \frac{{n}_{kd}{\beta }_{w}}{{n}_{k}+\bar{\beta }}
+        // \frac{{n}_{kd}{\beta}_{w}}{{n}_{k}+\bar{\beta}}
         docTopicCounter.activeIterator.foreach { case (topic, cn) =>
           probDist(topic) = cn * beta /
             (totalTopicCounter(topic) + numTerms * beta)
@@ -284,6 +283,65 @@ class LDA private[mllib](
 
     logInfo(s"end perplexity computing")
     math.exp(-1 * termProb / totalSize)
+  }
+
+  def docLikelihood(): Double = {
+    val alphaSum = alpha * numTopics
+    val zeroLLH = logGamma(alpha)
+    docVertices.map { case (_, docTopicCounter) =>
+      var probSum = logGamma(alphaSum) - numTopics * logGamma(alpha)
+      var numNoZeros = 0
+      docTopicCounter.activeIterator.filter(_._2 > 0).foreach { case (topic, cn) =>
+        numNoZeros += 1
+        probSum += logGamma(cn + alpha)
+      }
+      probSum + (numTopics - numNoZeros) * zeroLLH - logGamma(brzSum(docTopicCounter) + alphaSum)
+    }.sum()
+  }
+
+  def wordLikelihood(): Double = {
+    val zeroLLH = logGamma(beta)
+    termVertices.map { case (_, termTopicCounter) =>
+      var probSum = 0D
+      var numNoZeros = 0
+      termTopicCounter.activeIterator.filter(_._2 > 0).foreach { case (topic, cn) =>
+        numNoZeros += 1
+        probSum += logGamma(cn + beta)
+      }
+      probSum + (numTopics - numNoZeros) * zeroLLH
+    }.sum() + wordLikelihoodSummary()
+  }
+
+  private def wordLikelihoodSummary(): Double = {
+    val betaSum = beta * numTerms
+    var probSum = numTopics * (logGamma(betaSum) - numTerms * logGamma(beta))
+    for (topic <- 0 until numTopics) {
+      probSum -= logGamma(totalTopicCounter(topic) + betaSum)
+    }
+    probSum
+  }
+
+  private def logGamma(xx: Double): Double = {
+    val cof = Array(
+      76.18009172947146, -86.50532032941677,
+      24.01409824083091, -1.231739572450155,
+      0.1208650973866179e-2, -0.5395239384953e-5)
+    var j = 0
+    var x = 0.0
+    var y = 0.0
+    var tmp1 = 0.0
+    var ser = 0.0
+    y = xx
+    x = xx
+    tmp1 = x + 5.5
+    tmp1 -= (x + 0.5) * Math.log(tmp1)
+    ser = 1.000000000190015
+    while (j < 6) {
+      y += 1
+      ser += cof(j) / y
+      j += 1
+    }
+    -tmp1 + Math.log(2.5066282746310005 * ser / x)
   }
 }
 
