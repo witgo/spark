@@ -20,7 +20,7 @@ package org.apache.spark.mllib.feature
 import java.util.Random
 
 import breeze.linalg.{DenseVector => BDV, DenseMatrix => BDM, Matrix => BM,
-max => brzMax, Axis => brzAxis, sum => brzSum, axpy => brzAxpy}
+max => brzMax, Axis => brzAxis, sum => brzSum, axpy => brzAxpy, norm => brzNorm}
 
 import org.apache.spark.Logging
 import org.apache.spark.annotation.Experimental
@@ -174,7 +174,7 @@ class Sentence2vec(
     }
     val (mlpOuts, mlpDeltas) = mlp.computeDelta(mlpIn, label)
     val mlpGrads = mlp.computeGradientGivenDelta(mlpIn, mlpOuts, mlpDeltas)
-    val cost = NNUtil.meanSquaredError(mlpOuts.last, label) / randomizeSize
+    val cost: Double = (randomizeSize - cosineDistance(mlpOuts.last, label)) / randomizeSize
     val prevDelta: BDM[Double] = mlp.innerLayers.head.weight.t * mlpDeltas.head
     val inputDelta = brzSum(prevDelta, brzAxis._1)
     inputDelta :/= randomizeSize.toDouble
@@ -227,6 +227,16 @@ class Sentence2vec(
       word2Vec(s * vectorSize until (s + 1) * vectorSize)
     }
     BDV.vertcat(vectors.toArray: _*).asDenseMatrix.t
+  }
+
+  private def cosineDistance(out: BDM[Double], label: BDM[Double]): Double = {
+    var diff = 0D
+    for (i <- 0 until out.cols) {
+      val a = out(::, i)
+      val b = label(::, i)
+      diff += (a.dot(b) / brzNorm(b, 2) / brzNorm(a, 2))
+    }
+    diff
   }
 }
 
