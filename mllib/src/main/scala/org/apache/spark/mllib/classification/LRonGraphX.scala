@@ -32,17 +32,22 @@ import LRonGraphX._
 
 class LRonGraphX(
   @transient var dataSet: Graph[VD, ED],
-  @transient var storageLevel: StorageLevel,
+  val numFeatures: Int,
   val stepSize: Double = 1e-4,
+  val regParam: Double = 1e-2,
   val epsilon: Double = 1e-6,
-  val regParam: Double = 1e-2) extends Serializable with Logging {
+  @transient var storageLevel: StorageLevel =
+  StorageLevel.MEMORY_AND_DISK) extends Serializable with Logging {
 
-  def this(input: RDD[(VertexId, LabeledPoint)], storageLevel: StorageLevel) {
-    this(initializeDataSet(input, storageLevel), storageLevel)
+  def this(
+    input: RDD[(VertexId, LabeledPoint)],
+    numFeatures: Int,
+    stepSize: Double,
+    regParam: Double) {
+    this(initializeDataSet(input, StorageLevel.MEMORY_AND_DISK), numFeatures, stepSize, regParam)
   }
 
   @transient private var innerIter = 1
-  lazy val numFeatures: Int = features.count().toInt
   lazy val numSamples: Long = samples.count()
 
   def samples: VertexRDD[VD] = {
@@ -62,7 +67,7 @@ class LRonGraphX(
       val delta = backward(q)
       dataSet = updateWeight(delta, iter)
       dataSet = checkpoint(dataSet)
-      dataSet.cache()
+      dataSet.persist(storageLevel)
       dataSet.vertices.count()
       dataSet.edges.count()
       previousDataSet.unpersist()
@@ -72,7 +77,7 @@ class LRonGraphX(
   }
 
   def saveModel(): LogisticRegressionModel = {
-    val featureData = new Array[VD](features.map(_._1).max().toInt + 1)
+    val featureData = new Array[VD](numFeatures)
     features.toLocalIterator.foreach { case (index, value) =>
       featureData(index.toInt) = value
     }
@@ -165,8 +170,17 @@ object LRonGraphX {
     input: RDD[LabeledPoint],
     numIterations: Int,
     stepSize: Double,
-    storageLevel: StorageLevel =
-    StorageLevel.MEMORY_AND_DISK): LogisticRegressionModel = {
+    regParam: Double): LogisticRegressionModel = {
+    train(input, numIterations, 0, stepSize, regParam)
+  }
+
+  def train(
+    input: RDD[LabeledPoint],
+    numIterations: Int,
+    numFeatures: Int,
+    stepSize: Double,
+    regParam: Double,
+    storageLevel: StorageLevel = StorageLevel.MEMORY_AND_DISK): LogisticRegressionModel = {
     val data = input.zipWithIndex().map(_.swap).map { case (id, LabeledPoint(label, features)) =>
       val values = features match {
         case SDV(values) => values
@@ -187,7 +201,11 @@ object LRonGraphX {
     }
     data.persist(storageLevel)
     val dataSet = initializeDataSet(data, storageLevel)
-    val lr = new LRonGraphX(dataSet, storageLevel, stepSize)
+    val lr = new LRonGraphX(dataSet, if (numFeatures < 1) {
+      data.first()._2.features.size
+    } else {
+      numFeatures
+    }, stepSize, regParam)
     lr.run(numIterations)
     val model = lr.saveModel()
     data.unpersist()

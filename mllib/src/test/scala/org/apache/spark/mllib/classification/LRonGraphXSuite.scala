@@ -25,6 +25,6 @@ class LRonGraphXSuite extends FunSuite with MLlibTestSparkContext with Matchers 
     val sparkHome = sys.props.getOrElse("spark.test.home", fail("spark.test.home is not set!"))
     val dataSetFile = s"${sparkHome}/data/mllib/lr_data.10M.txt"
     val dataSet = MLUtils.loadLibSVMFile(sc, dataSetFile)
-    LRonGraphX.train(dataSet, 1000, 1e-3)
+    LRonGraphX.train(dataSet, 500, 1e-2, 1e-2)
   }
 }
