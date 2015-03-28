@@ -24,7 +24,7 @@ class ANN2Suite extends FunSuite with MLlibTestSparkContext {
     val layerSizes = dataSample._1.size +: hiddenLayersTopology :+ dataSample._2.size
     val topology = Topology.multiLayerPerceptron(layerSizes)
     val initialWeights = FeedForwardModel(topology, 23124).weights()
-    val model = FeedForwardNetwork.train(rddData, 1, 20, topology, initialWeights)
+    val model = FeedForwardTrainer.train(rddData, 1, 20, topology, initialWeights)
     val predictionAndLabels = rddData.map { case (input, label) =>
       (model.predict(input)(0), label(0))
     }.collect()
