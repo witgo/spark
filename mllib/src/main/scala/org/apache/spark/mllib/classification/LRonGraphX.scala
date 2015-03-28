@@ -17,7 +17,11 @@
 
 package org.apache.spark.mllib.classification
 
+import java.util
+import java.util.{PriorityQueue => JPriorityQueue}
+
 import scala.math._
+import scala.collection.JavaConversions._
 
 import org.apache.spark.graphx._
 import org.apache.spark.graphx.impl.GraphImpl
@@ -26,7 +30,9 @@ import org.apache.spark.mllib.linalg.{DenseVector => SDV, SparseVector => SSV, V
 import org.apache.spark.mllib.regression.LabeledPoint
 import org.apache.spark.rdd.RDD
 import org.apache.spark.storage.StorageLevel
+import org.apache.spark.util.collection.AppendOnlyMap
 import org.apache.spark.util.Utils
+
 
 import LRonGraphX._
 
@@ -228,17 +234,33 @@ object LRonGraphX {
     var dataSet = Graph.fromEdges(edges, null)
 
     // degree-based hashing
-    val degrees = dataSet.degrees
-    val threshold = (degrees.map(_._2.toDouble).sum() /
-      (2.0 * degrees.filter(t => t._1 < 0).count())).ceil.toInt
-    println(s"threshold $threshold")
+    //  val degrees = dataSet.degrees
+    //  val threshold = (degrees.map(_._2.toDouble).sum() /
+    //    (2.0 * degrees.filter(t => t._1 < 0).count())).ceil.toInt
+    //  println(s"threshold $threshold")
+    //  val numPartitions = edges.partitions.size
+    //  val partitionStrategy = new DBHPartitioner(numPartitions, threshold)
+    //  val newEdges = dataSet.triplets.map { e =>
+    //    (partitionStrategy.getPartition(e), Edge(e.srcId, e.dstId, e.attr))
+    //  }.partitionBy(new HashPartitioner(numPartitions)).map(_._2)
+    //  dataSet = Graph.fromEdges(newEdges, null, storageLevel, storageLevel)
+    // end degree-based hashing
+
+    // dynamic hashing
     val numPartitions = edges.partitions.size
-    val partitionStrategy = new DBHPartitioner(numPartitions, threshold)
-    val newEdges = dataSet.triplets.map { e =>
-      (partitionStrategy.getPartition(e), Edge(e.srcId, e.dstId, e.attr))
+    val degrees = dataSet.outerJoinVertices(dataSet.degrees) { (vid, data, deg) =>
+      deg.getOrElse(0)
+    }
+    val newEdges = degrees.triplets.mapPartitions { iter =>
+      val partitionStrategy = new DynamicPartitioner(numPartitions)
+      iter.map { e => (partitionStrategy.getPartition(e), Edge(e.srcId, e.dstId, e.attr)) }
     }.partitionBy(new HashPartitioner(numPartitions)).map(_._2)
     dataSet = Graph.fromEdges(newEdges, null, storageLevel, storageLevel)
-    // end degree-based hashing
+
+    println(s"edges distribution($numPartitions)")
+    dataSet.edges.mapPartitions(t => Iterator(t.size)).toLocalIterator.foreach(println)
+    // end dynamic hashing
+
 
     dataSet.outerJoinVertices(vertices) { (vid, data, deg) =>
       deg.getOrElse(Utils.random.nextGaussian() * 1e-2)
@@ -281,6 +303,83 @@ private class DBHPartitioner(val partitions: Int, val threshold: Int = 70) exten
 
   override def equals(other: Any): Boolean = other match {
     case h: DBHPartitioner =>
+      h.numPartitions == numPartitions
+    case _ =>
+      false
+  }
+
+  override def hashCode: Int = numPartitions
+}
+
+
+private class DynamicPartitioner(val numPartitions: Int) extends Serializable {
+  @transient lazy val mixingPrime: Long = 1125899906842597L
+  @transient lazy val vert2Pid = new AppendOnlyMap[VertexId, Int]()
+  @transient lazy val pid2Size = new AppendOnlyMap[Int, Long]()
+
+  for (i <- 1 to numPartitions) {
+    pid2Size(i) = 0
+  }
+
+  def getPartition(edge: EdgeTriplet[Int, ED]): Int = {
+    val srcId = edge.srcId
+    val dstId = edge.dstId
+    val srcDeg = edge.srcAttr
+    val dstDeg = edge.dstAttr
+    val srcPid = vert2Pid(srcId)
+    val dstPid = vert2Pid(dstId)
+
+    val edgePid = if (srcPid > 0 && dstPid > 0) {
+      val degPid = if (srcDeg <= dstDeg) srcPid else dstPid
+      updatePid(degPid)
+      degPid
+    } else if (srcPid > 0 || dstPid > 0) {
+      val pid = if (srcPid > 0) srcPid else dstPid
+      val vertId = if (srcPid > 0) dstId else srcId
+      vert2Pid.update(vertId, pid)
+      updatePid(pid)
+      pid
+    } else {
+      val pid = minSizePid
+      vert2Pid.update(srcId, pid)
+      vert2Pid.update(dstId, pid)
+      updatePid(pid)
+      pid
+    }
+    edgePid - 1
+  }
+
+  def updatePid(pid: Int): Long = {
+    pid2Size.changeValue(pid, (_, oldValue) => oldValue + 1L)
+  }
+
+  def minSizePid: Int = {
+    val itr = pid2Size.iterator
+    var pid = 1
+    var pidSize = Long.MaxValue
+    while (itr.hasNext) {
+      val t = itr.next()
+      val tPid = t._1
+      val tSize = t._2
+      if (tSize < pidSize) {
+        pid = tPid
+        pidSize = tSize
+      }
+    }
+    pid
+  }
+
+
+  def getPartition(idx: Int): PartitionID = {
+    getPartition(idx.toLong)
+  }
+
+  def getPartition(idx: Long): PartitionID = {
+    (abs(idx * mixingPrime) % numPartitions).toInt
+  }
+
+  override def equals(other: Any): Boolean = other match {
+    case h: DynamicPartitioner =>
       h.numPartitions == numPartitions
     case _ =>
       false
