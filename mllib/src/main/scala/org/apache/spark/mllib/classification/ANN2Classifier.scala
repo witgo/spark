@@ -17,7 +17,7 @@
 
 package org.apache.spark.mllib.classification
 
-import org.apache.spark.mllib.ann2.{Topology, FeedForwardNetwork, FeedForwardModel}
+import org.apache.spark.mllib.ann2.{FeedForwardNetwork, FeedForwardTrainer, Topology, FeedForwardModel}
 import org.apache.spark.mllib.linalg.Vector
 import org.apache.spark.mllib.regression.LabeledPoint
 import org.apache.spark.rdd.RDD
@@ -78,7 +78,7 @@ class ANN2Classifier private(val labelToIndex: Map[Double, Int],
   def run(data: RDD[LabeledPoint], batchSize: Int = 1): ANN2ClassifierModel = {
     val annData = data.map(lp => labeledPointToVectorPair(lp))
     /* train the model */
-    val model = FeedForwardNetwork.train(annData, batchSize, maxIterations, topology, weights)
+    val model = FeedForwardTrainer.train(annData, batchSize, maxIterations, topology, weights)
     new ANN2ClassifierModel(model, labelToIndex)
   }
 }

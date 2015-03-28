@@ -22,7 +22,7 @@ import breeze.linalg.
 import breeze.numerics.{sigmoid => Bsigmoid}
 
 import org.apache.spark.mllib.linalg.{Vector, Vectors}
-import org.apache.spark.mllib.optimization.{GradientDescent, Updater, LBFGS, Gradient}
+import org.apache.spark.mllib.optimization._
 import org.apache.spark.rdd.RDD
 import org.apache.spark.util.random.XORShiftRandom
 
@@ -395,41 +395,101 @@ private class ANNUpdater extends Updater {
 }
 /* MLlib-style trainer class that trains a network given the data and topology
 * */
-class FeedForwardNetwork private[mllib](topology: Topology, maxNumIterations: Int,
-                                        convergenceTol: Double, inputSize: Int, outputSize: Int,
-                                        batchSize: Int = 1) extends Serializable {
+//class FeedForwardNetwork private[mllib](topology: Topology, maxNumIterations: Int,
+//                                        convergenceTol: Double, inputSize: Int, outputSize: Int,
+//                                        batchSize: Int = 1) extends Serializable {
+class FeedForwardTrainer private[mllib](topology: Topology, inputSize: Int, outputSize: Int) extends Serializable {
 
-  private val dataStacker = new DataStacker(batchSize, inputSize, outputSize)
-  private val gradient =
-    new ANNGradient(topology, dataStacker)
-  private val updater = new ANNUpdater()
-  private val optimizer = new LBFGS(gradient, updater).
-    setConvergenceTol(convergenceTol).setNumIterations(maxNumIterations)
-//private val optimizer = new GradientDescent(gradient, updater).
-//  setNumIterations(maxNumIterations)
+  // TODO: what if we need to pass random seed?
+  private var _weights = FeedForwardModel(topology).weights()
+  private var _batchSize = 1
+  private var dataStacker = new DataStacker(_batchSize, inputSize, outputSize)
+  private var _gradient: Gradient = new ANNGradient(topology, dataStacker)
+  private var _updater: Updater = new ANNUpdater()
+  private var optimizer: Optimizer = LBFGSOptimizer.setConvergenceTol(1e-4).setNumIterations(100)
 
-  private def run(data: RDD[(Vector, Vector)],
-                  initialWeights: Vector): FeedForwardModel = {
 
-    val weights = optimizer.optimize(dataStacker.stack(data), initialWeights)
-    FeedForwardModel(topology, weights)
+  def getWeights = _weights
+
+  def setWeights(value: Vector): this.type = {
+    _weights = value
+    this
   }
+
+  def setBatchSize(value: Int): this.type = {
+    _batchSize = value
+    dataStacker = new DataStacker(value, inputSize, outputSize)
+    this
+  }
+
+  def SGDOptimizer: GradientDescent = {
+    val sgd = new GradientDescent(_gradient, _updater)
+    optimizer = sgd
+    sgd
+  }
+
+  def LBFGSOptimizer: LBFGS = {
+    val lbfgs = new LBFGS(_gradient, _updater)
+    optimizer = lbfgs
+    lbfgs
+  }
+
+  def setUpdater(value: Updater): this.type =  {
+    _updater = value
+    updateUpdater(value)
+    this
+  }
+
+  def setGradient(value: Gradient): this.type = {
+    _gradient = value
+    updateGradient(value)
+    this
+  }
+
+  private[this] def updateGradient(gradient: Gradient): Unit = {
+    optimizer match {
+      case lbfgs: LBFGS => lbfgs.setGradient(gradient)
+      case sgd: GradientDescent => sgd.setGradient(gradient)
+      case other => throw new UnsupportedOperationException(
+        s"Only LBFGS and GradientDescent are supported but got ${other.getClass}.")
+    }
+  }
+
+  private[this] def updateUpdater(updater: Updater): Unit = {
+    optimizer match {
+      case lbfgs: LBFGS => lbfgs.setUpdater(updater)
+      case sgd: GradientDescent => sgd.setUpdater(updater)
+      case other => throw new UnsupportedOperationException(
+        s"Only LBFGS and GradientDescent are supported but got ${other.getClass}.")
+    }
+  }
+
+  def train(data: RDD[(Vector, Vector)]): FeedForwardModel = {
+    val newWeights = optimizer.optimize(dataStacker.stack(data), getWeights)
+    FeedForwardModel(topology, newWeights)
+  }
+
 }
 
 /* MLlib-style object for the collection of train methods
  *
  */
-object FeedForwardNetwork {
+object FeedForwardTrainer {
 
   def train(trainingRDD: RDD[(Vector, Vector)],
             batchSize: Int,
             maxIterations: Int,
             topology: Topology,
             initialWeights: Vector) = {
+//    new FeedForwardNetwork(topology, maxIterations, 1e-4, inputSize, outputSize, batchSize).
+//      run(trainingRDD, initialWeights)
     val dataSample = trainingRDD.first()
     val inputSize = dataSample._1.size
     val outputSize = dataSample._2.size
-    new FeedForwardNetwork(topology, maxIterations, 1e-4, inputSize, outputSize, batchSize).
-      run(trainingRDD, initialWeights)
+    val trainer = new FeedForwardTrainer(topology, inputSize, outputSize).
+      setBatchSize(batchSize).setWeights(initialWeights)
+    trainer.LBFGSOptimizer.setNumIterations(maxIterations).setConvergenceTol(1e-4)
+    //trainer.SGDOptimizer.setNumIterations(maxIterations)
+    trainer.train(trainingRDD)
   }
 }
