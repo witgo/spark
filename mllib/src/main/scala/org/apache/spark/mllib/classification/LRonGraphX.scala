@@ -182,20 +182,6 @@ object LRonGraphX {
     regParam: Double,
     storageLevel: StorageLevel = StorageLevel.MEMORY_AND_DISK): LogisticRegressionModel = {
     val data = input.zipWithIndex().map(_.swap).map { case (id, LabeledPoint(label, features)) =>
-      val values = features match {
-        case SDV(values) => values
-        case SSV(size, indices, values) => values
-      }
-
-      //  val sum = values.map(abs).sum
-      //  for (i <- 0 until values.length) {
-      //    values(i) = values(i) / sum
-      //  }
-
-      for (i <- 0 until values.length) {
-        val v = values(i)
-        values(i) = max(signum(v), 0)
-      }
       val newLabel = if (label > 0.0) 1.0 else -1.0
       (id, LabeledPoint(newLabel, features))
     }
