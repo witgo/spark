@@ -395,10 +395,8 @@ private class ANNUpdater extends Updater {
 }
 /* MLlib-style trainer class that trains a network given the data and topology
 * */
-//class FeedForwardNetwork private[mllib](topology: Topology, maxNumIterations: Int,
-//                                        convergenceTol: Double, inputSize: Int, outputSize: Int,
-//                                        batchSize: Int = 1) extends Serializable {
-class FeedForwardTrainer private[mllib](topology: Topology, inputSize: Int, outputSize: Int) extends Serializable {
+class FeedForwardTrainer (topology: Topology, val inputSize: Int,
+                          val outputSize: Int) extends Serializable {
 
   // TODO: what if we need to pass random seed?
   private var _weights = FeedForwardModel(topology).weights()
