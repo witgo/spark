@@ -17,7 +17,7 @@
 
 package org.apache.spark.mllib.classification
 
-import org.apache.spark.mllib.ann2.{FeedForwardNetwork, FeedForwardTrainer, Topology, FeedForwardModel}
+import org.apache.spark.mllib.ann2.{FeedForwardTrainer, Topology, FeedForwardModel}
 import org.apache.spark.mllib.linalg.Vector
 import org.apache.spark.mllib.regression.LabeledPoint
 import org.apache.spark.rdd.RDD
