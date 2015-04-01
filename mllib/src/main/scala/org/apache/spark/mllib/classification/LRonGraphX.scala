@@ -21,29 +21,31 @@ import scala.math._
 
 import org.apache.spark.graphx._
 import org.apache.spark.graphx.impl.GraphImpl
-import org.apache.spark.{HashPartitioner, Logging, Partitioner}
-import org.apache.spark.mllib.linalg.{DenseVector => SDV, SparseVector => SSV, Vectors}
+import org.apache.spark.mllib.classification.LRonGraphX._
+import org.apache.spark.mllib.linalg.{DenseVector => SDV}
 import org.apache.spark.mllib.regression.LabeledPoint
 import org.apache.spark.rdd.RDD
 import org.apache.spark.storage.StorageLevel
 import org.apache.spark.util.Utils
-
-import LRonGraphX._
+import org.apache.spark.{HashPartitioner, Logging, Partitioner}
 
 class LRonGraphX(
   @transient var dataSet: Graph[VD, ED],
   val numFeatures: Int,
-  val stepSize: Double = 1e-4,
-  val regParam: Double = 1e-2,
-  @transient var storageLevel: StorageLevel =
-  StorageLevel.MEMORY_AND_DISK) extends Serializable with Logging {
+  val stepSize: Double,
+  val regParam: Double,
+  val epsilon: Double,
+  @transient var storageLevel: StorageLevel) extends Serializable with Logging {
 
   def this(
     input: RDD[(VertexId, LabeledPoint)],
     numFeatures: Int,
-    stepSize: Double,
-    regParam: Double) {
-    this(initializeDataSet(input, StorageLevel.MEMORY_AND_DISK), numFeatures, stepSize, regParam)
+    stepSize: Double = 1e-4,
+    regParam: Double = 0.0,
+    epsilon: Double = 0.0,
+    storageLevel: StorageLevel = StorageLevel.MEMORY_AND_DISK) {
+    this(initializeDataSet(input, storageLevel),
+      numFeatures, stepSize, regParam, epsilon, storageLevel)
   }
 
   @transient private var innerIter = 1
@@ -87,10 +89,12 @@ class LRonGraphX(
   }
 
   def meanSquaredError(q: VertexRDD[VD]): Double = {
-    samples.join(q).map { case (_, (label, score)) =>
-      val diff = max(label, 0.0) - score
+    samples.join(q).map { case (_, (y, q)) =>
+      val score = 1 - q
+      val label = if (y > 0.0) 1.0 else 0.0
+      val diff = label - score
       pow(diff, 2)
-    }.sum / numSamples
+    }.reduce(_ + _) / numSamples
   }
 
   def forward(): VertexRDD[VD] = {
@@ -104,7 +108,7 @@ class LRonGraphX(
       assert(!z.isNaN)
       ctx.sendToDst(z)
     }, _ + _, TripletFields.All).mapValues { z =>
-      val q = 1.0 / (1.0 + Math.exp(z))
+      val q = 1.0 / (1.0 + exp(z))
       // if (q.isInfinite || q.isNaN || q == 0.0) println(z)
       assert(q != 0.0)
       q
@@ -117,7 +121,6 @@ class LRonGraphX(
     }.aggregateMessages[Array[Double]](ctx => {
       // val sampleId = ctx.dstId
       // val featureId = ctx.srcId
-
       val x = ctx.attr
       val y = ctx.dstAttr._1
       val q = ctx.dstAttr._2 * abs(x)
@@ -129,20 +132,23 @@ class LRonGraphX(
       }
       ctx.sendToSrc(mu)
     }, (a, b) => Array(a(0) + b(0), a(1) + b(1)), TripletFields.Dst).mapValues { mu =>
-      if (mu.min == 0.0) 0.0 else math.log(mu(0) / mu(1))
+      if (mu.min == 0.0) 0.0 else math.log((mu(0) + epsilon) / (mu(1) + epsilon))
     }
   }
 
   // Updater for L1 regularized problems
   def updateWeight(delta: VertexRDD[Double], iter: Int): Graph[VD, ED] = {
-    val thisIterStepSize = stepSize / sqrt(iter)
+    // val thisIterStepSize = stepSize / sqrt(iter)
+    val thisIterStepSize = stepSize
     dataSet.outerJoinVertices(delta) { (_, attr, mu) =>
       mu match {
         case Some(gard) => {
           var weight = attr
-          weight += thisIterStepSize * gard
-          val shrinkageVal = regParam * thisIterStepSize
-          weight = signum(weight) * max(0.0, abs(weight) - shrinkageVal)
+          weight = weight + thisIterStepSize * gard
+          if (regParam > 0.0) {
+            val shrinkageVal = regParam * thisIterStepSize
+            weight = signum(weight) * max(0.0, abs(weight) - shrinkageVal)
+          }
           assert(!weight.isNaN)
           weight
         }
@@ -185,18 +191,17 @@ object LRonGraphX {
     stepSize: Double,
     regParam: Double,
     storageLevel: StorageLevel = StorageLevel.MEMORY_AND_DISK): LogisticRegressionModel = {
-    val data = input.zipWithIndex().map(_.swap).map { case (id, LabeledPoint(label, features)) =>
+    val data = input.zipWithIndex().map { case (LabeledPoint(label, features), id) =>
       features.foreachActive((index, value) => assert(abs(value) <= 1.0))
       val newLabel = if (label > 0.0) 1.0 else -1.0
       (id, LabeledPoint(newLabel, features))
     }
-    data.persist(storageLevel)
-    val dataSet = initializeDataSet(data, storageLevel)
-    val lr = new LRonGraphX(dataSet, if (numFeatures < 1) {
+    val newNumFeatures = if (numFeatures < 1) {
       data.first()._2.features.size
     } else {
       numFeatures
-    }, stepSize, regParam)
+    }
+    val lr = new LRonGraphX(data, newNumFeatures, stepSize, regParam, 0.0, storageLevel)
     lr.run(numIterations)
     val model = lr.saveModel()
     data.unpersist()
@@ -219,20 +224,24 @@ object LRonGraphX {
     var dataSet = Graph.fromEdges(edges, null)
 
     // degree-based hashing
-    val degrees = dataSet.degrees
-    val threshold = (degrees.map(_._2.toDouble).sum() /
-      (2.0 * degrees.filter(t => t._1 < 0).count())).ceil.toInt
-    println(s"threshold $threshold")
+    val degrees = dataSet.outerJoinVertices(dataSet.degrees) { (vid, data, deg) =>
+      deg.getOrElse(0)
+    }
+    val sumDeg = degrees.vertices.map(_._2.toDouble).sum()
+    val sumVert = degrees.vertices.filter(_._1 < 0L).count()
+    val threshold = (sumDeg / (2.0 * sumVert)).ceil.toInt
+    println(s"DBHPartitioner threshold: $threshold")
     val numPartitions = edges.partitions.size
     val partitionStrategy = new DBHPartitioner(numPartitions, threshold)
-    val newEdges = dataSet.triplets.map { e =>
+    val newEdges = degrees.triplets.map { e =>
       (partitionStrategy.getPartition(e), Edge(e.srcId, e.dstId, e.attr))
     }.partitionBy(new HashPartitioner(numPartitions)).map(_._2)
     dataSet = Graph.fromEdges(newEdges, null, storageLevel, storageLevel)
-    // end degree-based hashing
+    // end degree -based hashing
 
     dataSet.outerJoinVertices(vertices) { (vid, data, deg) =>
       deg.getOrElse(Utils.random.nextGaussian() * 1e-2)
+      // deg.getOrElse(0)
     }
   }
 

@@ -17,14 +17,33 @@
 
 package org.apache.spark.mllib.classification
 
+import org.apache.spark.mllib.linalg._
 import org.apache.spark.mllib.util._
+import org.apache.spark.mllib.classification._
+
 import org.scalatest.{FunSuite, Matchers}
 
-class LRonGraphXSuite extends FunSuite with MLlibTestSparkContext with Matchers {
+class LRonGraphXSuite extends FunSuite with LocalClusterSparkContext with Matchers {
   test("10M dataSet") {
+
     val sparkHome = sys.props.getOrElse("spark.test.home", fail("spark.test.home is not set!"))
-    val dataSetFile = s"${sparkHome}/data/mllib/lr_data.10M.txt"
+    // val dataSetFile = s"${sparkHome}/data/mllib/trainingset.10M.txt"
+    val dataSetFile = s"${sparkHome}/data/mllib/kdda.10m.txt"
     val dataSet = MLUtils.loadLibSVMFile(sc, dataSetFile)
-    LRonGraphX.train(dataSet, 50, 1e-2, 1e-2)
+
+    // val dataSetFile = s"/input/lbs/recommend/kdda/*"
+    // val dataSet = MLUtils.loadLibSVMFile(sc, dataSetFile).repartition(72)
+
+    val max = dataSet.map(_.features.asInstanceOf[SparseVector].values.map(_.abs).max).max
+    println(s"max $max")
+    val trainSet = dataSet.map(t => {
+      val sv = t.features.asInstanceOf[SparseVector]
+      for (i <- 0 until sv.values.length) {
+        sv.values(i) /= max
+      }
+      t
+    }).sample(false, 0.3).cache()
+    LRonGraphX.train(trainSet, 1000, 1e-2, 1e-2)
+
   }
 }
