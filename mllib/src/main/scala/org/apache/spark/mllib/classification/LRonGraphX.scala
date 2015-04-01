@@ -35,7 +35,6 @@ class LRonGraphX(
   val numFeatures: Int,
   val stepSize: Double = 1e-4,
   val regParam: Double = 1e-2,
-  val epsilon: Double = 1e-6,
   @transient var storageLevel: StorageLevel =
   StorageLevel.MEMORY_AND_DISK) extends Serializable with Logging {
 
@@ -58,6 +57,9 @@ class LRonGraphX(
     dataSet.vertices.filter(t => t._1 >= 0)
   }
 
+  // Modified Iterative Scaling, the paper:
+  // A comparison of numerical optimizers for logistic regression
+  // http://research.microsoft.com/en-us/um/people/minka/papers/logreg/minka-logreg.pdf
   def run(iterations: Int): Unit = {
     for (iter <- 1 to iterations) {
       val previousDataSet = dataSet
@@ -77,7 +79,7 @@ class LRonGraphX(
   }
 
   def saveModel(): LogisticRegressionModel = {
-    val featureData = new Array[VD](numFeatures)
+    val featureData = new Array[Double](numFeatures)
     features.toLocalIterator.foreach { case (index, value) =>
       featureData(index.toInt) = value
     }
@@ -97,12 +99,13 @@ class LRonGraphX(
       // val featureId = ctx.srcId
       val x = ctx.attr
       val w = ctx.srcAttr
-      val label = ctx.dstAttr
-      val v = signum(label) * w * x
-      assert(!v.isNaN)
-      ctx.sendToDst(v)
-    }, _ + _, TripletFields.All).mapValues { v =>
-      val q = 1.0 / (1.0 + Math.exp(v))
+      val y = ctx.dstAttr
+      val z = y * w * x
+      assert(!z.isNaN)
+      ctx.sendToDst(z)
+    }, _ + _, TripletFields.All).mapValues { z =>
+      val q = 1.0 / (1.0 + Math.exp(z))
+      // if (q.isInfinite || q.isNaN || q == 0.0) println(z)
       assert(q != 0.0)
       q
     }
@@ -114,18 +117,19 @@ class LRonGraphX(
     }.aggregateMessages[Array[Double]](ctx => {
       // val sampleId = ctx.dstId
       // val featureId = ctx.srcId
-      val label = ctx.dstAttr._1
-      val qVal = ctx.dstAttr._2
-      assert(qVal != 0.0)
-      val mu = if (label > 0.0) {
-        Array(qVal, 0.0)
+
+      val x = ctx.attr
+      val y = ctx.dstAttr._1
+      val q = ctx.dstAttr._2 * abs(x)
+      assert(q != 0.0)
+      val mu = if (signum(x * y) > 0.0) {
+        Array(q, 0.0)
       } else {
-        Array(0.0, qVal)
+        Array(0.0, q)
       }
       ctx.sendToSrc(mu)
     }, (a, b) => Array(a(0) + b(0), a(1) + b(1)), TripletFields.Dst).mapValues { mu =>
       if (mu.min == 0.0) 0.0 else math.log(mu(0) / mu(1))
-      // math.log((mu(0) + epsilon) / (mu(1) + epsilon))
     }
   }
 
@@ -182,6 +186,7 @@ object LRonGraphX {
     regParam: Double,
     storageLevel: StorageLevel = StorageLevel.MEMORY_AND_DISK): LogisticRegressionModel = {
     val data = input.zipWithIndex().map(_.swap).map { case (id, LabeledPoint(label, features)) =>
+      features.foreachActive((index, value) => assert(abs(value) <= 1.0))
       val newLabel = if (label > 0.0) 1.0 else -1.0
       (id, LabeledPoint(newLabel, features))
     }
