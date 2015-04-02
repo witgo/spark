@@ -776,7 +776,6 @@ object LDA {
 /**
  * Degree-Based Hashing, the paper:
  * http://nips.cc/Conferences/2014/Program/event.php?ID=4569
- * @param partitions
  */
 private class DBHPartitioner(val partitions: Int, val threshold: Int = 70) extends Partitioner {
   val mixingPrime: Long = 1125899906842597L
@@ -785,20 +784,18 @@ private class DBHPartitioner(val partitions: Int, val threshold: Int = 70) exten
 
   def getPartition(key: Any): Int = {
     val edge = key.asInstanceOf[EdgeTriplet[Int, ED]]
-    val idMin = math.min(edge.srcAttr, edge.dstAttr)
-    val idMax = math.max(edge.srcAttr, edge.dstAttr)
-    if (idMax < threshold) {
-      getPartition(idMax)
+    val srcDeg = edge.srcAttr
+    val dstDeg = edge.dstAttr
+    val srcId = edge.srcId
+    val dstId = edge.dstId
+    val minId = if (srcDeg < dstDeg) srcId else dstId
+    val maxId = if (srcDeg < dstDeg) dstId else srcId
+    val maxDeg = if (srcDeg < dstDeg) dstDeg else srcDeg
+    if (maxDeg < threshold) {
+      getPartition(maxId)
     } else {
-      getPartition(idMin)
+      getPartition(minId)
     }
-    /*
-      if (idx < threshold) {
-        getPartition(edge.dstId)
-      } else {
-        getPartition(idx)
-      }
-    */
   }
 
   def getPartition(idx: Int): PartitionID = {
