@@ -42,7 +42,7 @@ class LRonGraphX(
     numFeatures: Int,
     stepSize: Double = 1e-4,
     regParam: Double = 0.0,
-    epsilon: Double = 0.0,
+    epsilon: Double = 1e-3,
     storageLevel: StorageLevel = StorageLevel.MEMORY_AND_DISK) {
     this(initializeDataSet(input, storageLevel),
       numFeatures, stepSize, regParam, epsilon, storageLevel)
@@ -71,16 +71,18 @@ class LRonGraphX(
       val previousDataSet = dataSet
       logInfo(s"Start train (Iteration $iter/$iterations)")
       val q = forward()
-      logInfo(s"train (Iteration $iter/$iterations) Log likelihood : ${logLikelihood(q)}")
+      q.persist(storageLevel)
+      // logInfo(s"train (Iteration $iter/$iterations) Log likelihood : ${logLikelihood(q)}")
       val delta = backward(q)
       dataSet = updateWeight(delta, iter)
+      delta.persist(storageLevel)
       dataSet = checkpoint(dataSet)
-      if (dataSet.vertices.getStorageLevel == StorageLevel.NONE) {
-        dataSet.persist(storageLevel)
-      }
+      dataSet.persist(storageLevel)
       dataSet.vertices.count()
       dataSet.edges.count()
-      previousDataSet.unpersist()
+      q.unpersist(blocking = false)
+      delta.unpersist(blocking = false)
+      previousDataSet.unpersist(blocking = false)
       logInfo(s"End train (Iteration $iter/$iterations)")
       innerIter += 1
     }
@@ -141,7 +143,12 @@ class LRonGraphX(
       }
       ctx.sendToSrc(mu)
     }, (a, b) => Array(a(0) + b(0), a(1) + b(1)), TripletFields.Dst).mapValues { mu =>
-      if (mu.min == 0.0) 0.0 else math.log((mu(0) + epsilon) / (mu(1) + epsilon))
+      // TODO: 0.0 right?
+      if (epsilon == 0.0) {
+        if (mu.min == 0.0) 0.0 else math.log(mu(0) / mu(1))
+      } else {
+        math.log((mu(0) + epsilon) / (mu(1) + epsilon))
+      }
     }
   }
 
@@ -149,7 +156,7 @@ class LRonGraphX(
   def updateWeight(delta: VertexRDD[Double], iter: Int): Graph[VD, ED] = {
     // val thisIterStepSize = stepSize / sqrt(iter)
     val thisIterStepSize = stepSize
-    dataSet.outerJoinVertices(delta) { (_, attr, mu) =>
+    val newVertices = dataSet.vertices.leftJoin(delta) { (_, attr, mu) =>
       mu match {
         case Some(gard) => {
           var weight = attr
@@ -164,6 +171,7 @@ class LRonGraphX(
         case None => attr
       }
     }
+    GraphImpl(newVertices, dataSet.edges)
   }
 
   private def checkpoint(corpus: Graph[VD, ED]): Graph[VD, ED] = {
@@ -210,7 +218,7 @@ object LRonGraphX {
     } else {
       numFeatures
     }
-    val lr = new LRonGraphX(data, newNumFeatures, stepSize, regParam, 0.0, storageLevel)
+    val lr = new LRonGraphX(data, newNumFeatures, stepSize, regParam, 1e-3, storageLevel)
     lr.run(numIterations)
     val model = lr.saveModel()
     data.unpersist()

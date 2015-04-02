@@ -27,12 +27,12 @@ class LRonGraphXSuite extends FunSuite with LocalClusterSparkContext with Matche
   test("10M dataSet") {
 
     val sparkHome = sys.props.getOrElse("spark.test.home", fail("spark.test.home is not set!"))
-    val dataSetFile = s"${sparkHome}/data/mllib/trainingset.10M.txt"
-    // val dataSetFile = s"${sparkHome}/data/mllib/kdda.10m.txt"
+    // val dataSetFile = s"${sparkHome}/data/mllib/trainingset.10M.txt"
+    val dataSetFile = s"${sparkHome}/data/mllib/kdda.10m.txt"
     val dataSet = MLUtils.loadLibSVMFile(sc, dataSetFile)
 
     // val dataSetFile = s"/input/lbs/recommend/kdda/*"
-    // val dataSet = MLUtils.loadLibSVMFile(sc, dataSetFile).repartition(144)
+    // val dataSet = MLUtils.loadLibSVMFile(sc, dataSetFile).repartition(72)
 
     val max = dataSet.map(_.features.asInstanceOf[SparseVector].values.map(_.abs).max).max
     println(s"max $max")
@@ -44,6 +44,9 @@ class LRonGraphXSuite extends FunSuite with LocalClusterSparkContext with Matche
       t
     })
     LRonGraphX.train(trainSet, 1000, 1e-2, 1e-2)
+
+    // val trainSet = dataSet.cache()
+    // LogisticRegressionWithSGD.train(trainSet, 1000)
 
   }
 }
