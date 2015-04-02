@@ -48,6 +48,10 @@ class LRonGraphX(
       numFeatures, stepSize, regParam, epsilon, storageLevel)
   }
 
+  if (dataSet.vertices.getStorageLevel == StorageLevel.NONE) {
+    dataSet.persist(storageLevel)
+  }
+
   @transient private var innerIter = 1
   lazy val numSamples: Long = samples.count()
 
@@ -67,11 +71,13 @@ class LRonGraphX(
       val previousDataSet = dataSet
       logInfo(s"Start train (Iteration $iter/$iterations)")
       val q = forward()
-      logInfo(s"train (Iteration $iter/$iterations) MSE: ${meanSquaredError(q)}")
+      logInfo(s"train (Iteration $iter/$iterations) Log likelihood : ${logLikelihood(q)}")
       val delta = backward(q)
       dataSet = updateWeight(delta, iter)
       dataSet = checkpoint(dataSet)
-      dataSet.persist(storageLevel)
+      if (dataSet.vertices.getStorageLevel == StorageLevel.NONE) {
+        dataSet.persist(storageLevel)
+      }
       dataSet.vertices.count()
       dataSet.edges.count()
       previousDataSet.unpersist()
@@ -88,12 +94,15 @@ class LRonGraphX(
     new LogisticRegressionModel(new SDV(featureData), 0.0)
   }
 
-  def meanSquaredError(q: VertexRDD[VD]): Double = {
+  def logLikelihood(q: VertexRDD[VD]): Double = {
     samples.join(q).map { case (_, (y, q)) =>
-      val score = 1 - q
+      val score = 1.0 - q
       val label = if (y > 0.0) 1.0 else 0.0
-      val diff = label - score
-      pow(diff, 2)
+      if (label == 1.0) {
+        math.log(score)
+      } else {
+        math.log(1 - score)
+      }
     }.reduce(_ + _) / numSamples
   }
 
@@ -217,31 +226,27 @@ object LRonGraphX {
         Edge(index, newId, value)
       }
     }
-    val vertices = VertexRDD(input.map { case (sampleId, labelPoint) =>
+    val vertices = input.map { case (sampleId, labelPoint) =>
       val newId = newSampleId(sampleId)
       (newId, labelPoint.label)
-    })
-    var dataSet = Graph.fromEdges(edges, null)
+    }
+    var dataSet = Graph.fromEdges(edges, null, storageLevel, storageLevel)
 
     // degree-based hashing
-    val degrees = dataSet.outerJoinVertices(dataSet.degrees) { (vid, data, deg) =>
-      deg.getOrElse(0)
-    }
-    val sumDeg = degrees.vertices.map(_._2.toDouble).sum()
-    val sumVert = degrees.vertices.filter(_._1 < 0L).count()
-    val threshold = (sumDeg / (2.0 * sumVert)).ceil.toInt
-    println(s"DBHPartitioner threshold: $threshold")
     val numPartitions = edges.partitions.size
-    val partitionStrategy = new DBHPartitioner(numPartitions, threshold)
-    val newEdges = degrees.triplets.map { e =>
+    val partitionStrategy = new DBHPartitioner(numPartitions)
+    val newEdges = dataSet.outerJoinVertices(dataSet.degrees) { (vid, data, deg) =>
+      deg.getOrElse(0)
+    }.triplets.map { e =>
       (partitionStrategy.getPartition(e), Edge(e.srcId, e.dstId, e.attr))
     }.partitionBy(new HashPartitioner(numPartitions)).map(_._2)
     dataSet = Graph.fromEdges(newEdges, null, storageLevel, storageLevel)
-    // end degree -based hashing
+    // end degree-based hashing
+    // dataSet = dataSet.partitionBy(PartitionStrategy.EdgePartition2D)
 
     dataSet.outerJoinVertices(vertices) { (vid, data, deg) =>
-      deg.getOrElse(Utils.random.nextGaussian() * 1e-2)
-      // deg.getOrElse(0)
+      // deg.getOrElse(Utils.random.nextGaussian() * 1e-2)
+      deg.getOrElse(0)
     }
   }
 
@@ -255,19 +260,21 @@ object LRonGraphX {
  * Degree-Based Hashing, the paper:
  * Distributed Power-law Graph Computing: Theoretical and Empirical Analysis
  */
-private class DBHPartitioner(val partitions: Int, val threshold: Int = 70) extends Partitioner {
+private class DBHPartitioner(val partitions: Int) extends Partitioner {
   val mixingPrime: Long = 1125899906842597L
 
   def numPartitions = partitions
 
   def getPartition(key: Any): Int = {
     val edge = key.asInstanceOf[EdgeTriplet[Int, ED]]
-    val idMin = min(edge.srcAttr, edge.dstAttr)
-    val idMax = max(edge.srcAttr, edge.dstAttr)
-    if (idMax < threshold) {
-      getPartition(idMax)
+    val srcDeg = edge.srcAttr
+    val dstDeg = edge.dstAttr
+    val srcId = edge.srcId
+    val dstId = edge.dstId
+    if (srcDeg < dstDeg) {
+      getPartition(srcId)
     } else {
-      getPartition(idMin)
+      getPartition(dstId)
     }
   }
 
