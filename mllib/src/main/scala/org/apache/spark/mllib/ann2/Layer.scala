@@ -132,15 +132,34 @@ object AffineLayerModel {
 * */
 object ANNFunctions {
 
-  def Sigmoid(x: Double): Double = Bsigmoid(x)
+  def apply(x: BDM[Double], y: BDM[Double], func: Double => Double): Unit = {
+    var i = 0
+    while (i < x.rows) {
+      var j = 0
+      while (j < x.cols) {
+        y(i, j) = func(x(i,j))
+        j += 1
+      }
+      i += 1
+    }
+  }
 
-  def SigmoidDerivative(x: Double): Double = (1 - x) * x
+  def Sigmoid(x: BDM[Double], y: BDM[Double]): Unit = {
+    def s(z: Double): Double = Bsigmoid(z)
+    ANNFunctions(x, y, s)
+  }
+
+  def SigmoidDerivative(x: BDM[Double], y: BDM[Double]): Unit = {
+    def sd(z: Double): Double = (1 - z) * z
+    ANNFunctions(x, y, sd)
+  }
+
 }
 
 /* Functional layer, that is y = f(x)
 * */
-class FunctionalLayer (activationFunction: Double => Double,
-                       activationDerivative: Double => Double) extends Layer {
+class FunctionalLayer (activationFunction: (BDM[Double], BDM[Double]) => Unit,
+                       activationDerivative: (BDM[Double], BDM[Double]) => Unit) extends Layer {
   override def getInstance(weights: Vector, position: Int): LayerModel = getInstance(0L)
 
   override def getInstance(seed: Long): LayerModel =
@@ -149,8 +168,8 @@ class FunctionalLayer (activationFunction: Double => Double,
 
 /* Functional layer model. Holds no parameters (weights).
 * */
-class FunctionalLayerModel private (activationFunction: Double => Double,
-                                    activationDerivative: Double => Double
+class FunctionalLayerModel private (activationFunction: (BDM[Double], BDM[Double]) => Unit,
+                                    activationDerivative: (BDM[Double], BDM[Double]) => Unit
                                      ) extends LayerModel {
   val size = 0
 
@@ -159,29 +178,14 @@ class FunctionalLayerModel private (activationFunction: Double => Double,
 
   override def eval(data: BDM[Double]): BDM[Double] =  {
     if (f == null || f.cols != data.cols) f = new BDM[Double](data.rows, data.cols)
-    var i = 0
-    while (i < data.rows) {
-      var j = 0
-      while (j < data.cols) {
-        f(i, j) = activationFunction(data(i,j))
-        j += 1
-      }
-      i += 1
-    }
+    activationFunction(data, f)
     f
   }
 
   override def prevDelta(nextDelta: BDM[Double], input: BDM[Double]): BDM[Double] = {
     if (d == null || d.cols != nextDelta.cols) d = new BDM[Double](nextDelta.rows, nextDelta.cols)
-    var i = 0
-    while (i < nextDelta.rows) {
-      var j = 0
-      while (j < nextDelta.cols) {
-        d(i, j) = nextDelta(i, j) * activationDerivative(input(i, j))
-        j += 1
-      }
-      i += 1
-    }
+    activationDerivative(input, d)
+    d :*= nextDelta
     d
   }
 
@@ -192,8 +196,8 @@ class FunctionalLayerModel private (activationFunction: Double => Double,
 }
 
 object FunctionalLayerModel {
-  def apply(activationFunction: Double => Double,
-            activationDerivative: Double => Double): FunctionalLayerModel = {
+  def apply(activationFunction: (BDM[Double], BDM[Double]) => Unit,
+            activationDerivative:  (BDM[Double], BDM[Double]) => Unit): FunctionalLayerModel = {
     new FunctionalLayerModel(activationFunction, activationDerivative)
   }
 }
