@@ -154,6 +154,31 @@ object ANNFunctions {
     ANNFunctions(x, y, sd)
   }
 
+  def Softmax(x: BDM[Double], y: BDM[Double]): Unit = {
+    var j = 0
+    while (j < x.cols) {
+      var i = 0
+      var sum = 0.0
+      while (i < x.rows) {
+        val res = Bsigmoid(x(i,j))
+        y(i, j) = res
+        sum += res
+        i += 1
+      }
+      i = 0
+      while (i < x.rows) {
+        y(i, j) /= sum
+        i += 1
+      }
+      j += 1
+    }
+  }
+
+  def SoftmaxDerivative(x: BDM[Double], y: BDM[Double]): Unit = {
+    SigmoidDerivative(x, y)
+  }
+
+
 }
 
 /* Functional layer, that is y = f(x)
