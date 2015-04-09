@@ -704,7 +704,12 @@ private class DBHPartitioner(partitions: Int) extends Partitioner {
     val minId = if (srcDeg < dstDeg) srcId else dstId
     getPartition(minId)
   }
+
   def getPartition(idx: Int): PartitionID = {
+    (math.abs(idx * mixingPrime) % partitions).toInt
+  }
+
+  def getPartition(idx: Long): PartitionID = {
     (math.abs(idx * mixingPrime) % partitions).toInt
   }
 
