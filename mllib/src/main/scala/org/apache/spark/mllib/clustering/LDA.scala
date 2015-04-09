@@ -719,6 +719,10 @@ private class DBHPartitioner(partitions: Int) extends Partitioner {
     (math.abs(idx * mixingPrime) % partitions).toInt
   }
 
+  def getPartition(idx: Long): PartitionID = {
+    (math.abs(idx * mixingPrime) % partitions).toInt
+  }
+
   override def equals(other: Any): Boolean = other match {
     case h: DBHPartitioner =>
       h.numPartitions == numPartitions
