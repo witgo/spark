@@ -186,8 +186,12 @@ class LDA private[mllib](
 
   def runGibbsSampling(iterations: Int): Unit = {
     for (iter <- 1 to iterations) {
-      logInfo(s"Start Gibbs sampling (Iteration $iter/$iterations)")
+      logInfo(s"Gibbs sampling perplexity $iter:              ${perplexity}")
+      val startedAt = System.nanoTime()
       gibbsSampling()
+      val endAt = System.nanoTime()
+      val useTime = (endAt - startedAt) / 1e9
+      logInfo(s"Gibbs sampling use time $iter:                  $useTime")
     }
   }
 
@@ -799,6 +803,10 @@ private class DBHPartitioner(partitions: Int) extends Partitioner {
   }
 
   def getPartition(idx: Int): PartitionID = {
+    (math.abs(idx * mixingPrime) % partitions).toInt
+  }
+
+  def getPartition(idx: Long): PartitionID = {
     (math.abs(idx * mixingPrime) % partitions).toInt
   }
 
