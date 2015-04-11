@@ -239,13 +239,8 @@ class LDA private (
       state.next()
       val elapsedSeconds = (System.nanoTime() - start) / 1e9
       iterationTimes(iter) = elapsedSeconds
-      logInfo(s"LDA EM use time $iter:         $elapsedSeconds")
-      logInfo(s"LDA EM docLikelihood $iter:         ${
-        LDA.docLikelihood(getAlpha - 1, getBeta - 1, state.vocabSize, getK, state.graph)
-      }")
-      logInfo(s"LDA EM wordLikelihood $iter:         ${
-        LDA.wordLikelihood(getBeta - 1, state.vocabSize, getK, state.globalTopicTotals, state.graph)
-      }")
+      logInfo(s"LDA EM takes $iter:         $elapsedSeconds")
+      logInfo(s"LDA EM logPrior $iter:         ${state.logPrior}")
       iter += 1
     }
     state.graphCheckpointer.deleteAllCheckpoints()
@@ -259,80 +254,6 @@ class LDA private (
 }
 
 private[clustering] object LDA {
-  def docLikelihood(
-    alpha: Double,
-    beta: Double,
-    numTerms: Double,
-    numTopics: Int,
-    graph: Graph[TopicCounts, TokenCount]): Double = {
-    val alphaSum = alpha * numTopics
-    val zeroLLH = logGamma(alpha)
-    graph.vertices.filter(_._1 > -1).map { case (_, docTopicCounter) =>
-      var probSum = logGamma(alphaSum) - numTopics * logGamma(alpha)
-      var numNoZeros = 0
-      docTopicCounter.activeIterator.filter(_._2 > 0).foreach { case (topic, cn) =>
-        numNoZeros += 1
-        probSum += logGamma(cn + alpha)
-      }
-      probSum + (numTopics - numNoZeros) * zeroLLH - logGamma(brzSum(docTopicCounter) + alphaSum)
-    }.sum()
-  }
-
-  def wordLikelihood(
-    beta: Double,
-    numTerms: Double,
-    numTopics: Int,
-    totalTopicCounter: TopicCounts,
-    graph: Graph[TopicCounts, TokenCount]): Double = {
-    val zeroLLH = logGamma(beta)
-    graph.vertices.filter(_._1 < 0).map { case (_, termTopicCounter) =>
-      var probSum = 0D
-      var numNoZeros = 0
-      termTopicCounter.activeIterator.filter(_._2 > 0).foreach { case (topic, cn) =>
-        numNoZeros += 1
-        probSum += logGamma(cn + beta)
-      }
-      probSum + (numTopics - numNoZeros) * zeroLLH
-    }.sum() + wordLikelihoodSummary(beta, numTerms, numTopics, totalTopicCounter)
-  }
-
-  private def wordLikelihoodSummary(
-    beta: Double,
-    numTerms: Double,
-    numTopics: Int,
-    totalTopicCounter: TopicCounts): Double = {
-    val betaSum = beta * numTerms
-    var probSum = numTopics * (logGamma(betaSum) - numTerms * logGamma(beta))
-    for (topic <- 0 until numTopics) {
-      probSum -= logGamma(totalTopicCounter(topic) + betaSum)
-    }
-    probSum
-  }
-
-  private def logGamma(xx: Double): Double = {
-    val cof = Array(
-      76.18009172947146, -86.50532032941677,
-      24.01409824083091, -1.231739572450155,
-      0.1208650973866179e-2, -0.5395239384953e-5)
-    var j = 0
-    var x = 0.0
-    var y = 0.0
-    var tmp1 = 0.0
-    var ser = 0.0
-    y = xx
-    x = xx
-    tmp1 = x + 5.5
-    tmp1 -= (x + 0.5) * Math.log(tmp1)
-    ser = 1.000000000190015
-    while (j < 6) {
-      y += 1
-      ser += cof(j) / y
-      j += 1
-    }
-    -tmp1 + Math.log(2.5066282746310005 * ser / x)
-  }
-
-
   /*
     DEVELOPERS NOTE:
 
@@ -473,6 +394,30 @@ private[clustering] object LDA {
     private def computeGlobalTopicTotals(): TopicCounts = {
       val numTopics = k
       graph.vertices.filter(isTermVertex).values.fold(BDV.zeros[Double](numTopics))(_ += _)
+    }
+
+    def logPrior: Double = {
+      val eta = topicConcentration
+      val alpha = docConcentration
+      // Term vertices: Compute phi_{wk}.  Use to compute prior log probability.
+      // Doc vertex: Compute theta_{kj}.  Use to compute prior log probability.
+      val N_k = globalTopicTotals
+      val smoothed_N_k: TopicCounts = N_k + (vocabSize * (eta - 1.0))
+      val seqOp: (Double, (VertexId, TopicCounts)) => Double = {
+        case (sumPrior: Double, vertex: (VertexId, TopicCounts)) =>
+          if (isTermVertex(vertex)) {
+            val N_wk = vertex._2
+            val smoothed_N_wk: TopicCounts = N_wk + (eta - 1.0)
+            val phi_wk: TopicCounts = smoothed_N_wk :/ smoothed_N_k
+            (eta - 1.0) * brzSum(phi_wk.map(math.log))
+          } else {
+            val N_kj = vertex._2
+            val smoothed_N_kj: TopicCounts = N_kj + (alpha - 1.0)
+            val theta_kj: TopicCounts = normalize(smoothed_N_kj, 1.0)
+            (alpha - 1.0) * brzSum(theta_kj.map(math.log))
+          }
+      }
+      graph.vertices.aggregate(0.0)(seqOp, _ + _)
     }
 
   }
