@@ -182,6 +182,7 @@ object GradientDescent extends Logging {
       weights, Vectors.dense(new Array[Double](weights.size)), 0, 1, regParam)._2
 
     for (i <- 1 to numIterations) {
+      val startedAt = System.nanoTime()
       val bcWeights = data.context.broadcast(weights)
       // Sample a subset (fraction miniBatchFraction) of the total data
       // compute and sum up the subgradients on this subset (this is one map-reduce)
@@ -202,6 +203,7 @@ object GradientDescent extends Logging {
          * NOTE(Xinghao): lossSum is computed using the weights from the previous iteration
          * and regVal is the regularization value computed in the previous iteration as well.
          */
+        logInfo(s"Loss $i              ${lossSum / miniBatchSize + regVal}")
         stochasticLossHistory.append(lossSum / miniBatchSize + regVal)
         val update = updater.compute(
           weights, Vectors.fromBreeze(gradientSum / miniBatchSize.toDouble), stepSize, i, regParam)
@@ -210,6 +212,8 @@ object GradientDescent extends Logging {
       } else {
         logWarning(s"Iteration ($i/$numIterations). The size of sampled batch is zero")
       }
+      val elapsedSeconds = (System.nanoTime() - startedAt) / 1e9
+      logInfo(s"Train (Iteration $i/$numIterations) takes:         $elapsedSeconds")
     }
 
     logInfo("GradientDescent.runMiniBatchSGD finished. Last 10 stochastic losses %s".format(

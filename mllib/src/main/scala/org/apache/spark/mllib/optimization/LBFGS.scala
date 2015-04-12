@@ -206,6 +206,7 @@ object LBFGS extends Logging {
     numExamples: Long) extends DiffFunction[BDV[Double]] {
 
     override def calculate(weights: BDV[Double]): (Double, BDV[Double]) = {
+      val startedAt = System.nanoTime()
       // Have a local copy to avoid the serialization of CostFun object which is not serializable.
       val w = Vectors.fromBreeze(weights)
       val n = w.size
@@ -230,6 +231,7 @@ object LBFGS extends Logging {
       val regVal = updater.compute(w, Vectors.zeros(n), 0, 1, regParam)._2
 
       val loss = lossSum / numExamples + regVal
+      logInfo(s"Loss $loss")
       /**
        * It will return the gradient part of regularization using updater.
        *
@@ -252,7 +254,8 @@ object LBFGS extends Logging {
 
       // gradientTotal = gradientSum / numExamples + gradientTotal
       axpy(1.0 / numExamples, gradientSum, gradientTotal)
-
+      val elapsedSeconds = (System.nanoTime() - startedAt) / 1e9
+      logInfo(s"Train takes:         $elapsedSeconds")
       (loss, gradientTotal.toBreeze.asInstanceOf[BDV[Double]])
     }
   }
