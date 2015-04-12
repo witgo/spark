@@ -396,28 +396,26 @@ private[clustering] object LDA {
       graph.vertices.filter(isTermVertex).values.fold(BDV.zeros[Double](numTopics))(_ += _)
     }
 
-    def logPrior: Double = {
+    def logPrior(): Double = {
       val eta = topicConcentration
       val alpha = docConcentration
       // Term vertices: Compute phi_{wk}.  Use to compute prior log probability.
       // Doc vertex: Compute theta_{kj}.  Use to compute prior log probability.
       val N_k = globalTopicTotals
       val smoothed_N_k: TopicCounts = N_k + (vocabSize * (eta - 1.0))
-      val seqOp: (Double, (VertexId, TopicCounts)) => Double = {
-        case (sumPrior: Double, vertex: (VertexId, TopicCounts)) =>
-          if (isTermVertex(vertex)) {
-            val N_wk = vertex._2
-            val smoothed_N_wk: TopicCounts = N_wk + (eta - 1.0)
-            val phi_wk: TopicCounts = smoothed_N_wk :/ smoothed_N_k
-            (eta - 1.0) * brzSum(phi_wk.map(math.log))
-          } else {
-            val N_kj = vertex._2
-            val smoothed_N_kj: TopicCounts = N_kj + (alpha - 1.0)
-            val theta_kj: TopicCounts = normalize(smoothed_N_kj, 1.0)
-            (alpha - 1.0) * brzSum(theta_kj.map(math.log))
-          }
-      }
-      graph.vertices.aggregate(0.0)(seqOp, _ + _)
+      graph.vertices.map { vertex =>
+        if (isTermVertex(vertex)) {
+          val N_wk = vertex._2
+          val smoothed_N_wk: TopicCounts = N_wk + (eta - 1.0)
+          val phi_wk: TopicCounts = smoothed_N_wk :/ smoothed_N_k
+          (eta - 1.0) * brzSum(phi_wk.map(math.log))
+        } else {
+          val N_kj = vertex._2
+          val smoothed_N_kj: TopicCounts = N_kj + (alpha - 1.0)
+          val theta_kj: TopicCounts = normalize(smoothed_N_kj, 1.0)
+          (alpha - 1.0) * brzSum(theta_kj.map(math.log))
+        }
+      }.sum
     }
 
   }
