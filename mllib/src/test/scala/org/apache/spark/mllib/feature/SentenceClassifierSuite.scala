@@ -38,13 +38,11 @@ class SentenceClassifierSuite extends FunSuite with MLlibTestSparkContext {
     }.filter(_.length > 1).map(_.toIterable).cache()
     println("txt " + txt.count)
     val word2Vec = new Word2Vec()
-    word2Vec.
-      setVectorSize(64).
-      setNumIterations(3)
+    word2Vec.setVectorSize(64).setNumIterations(3)
     val model = word2Vec.fit(txt.map(_.tail))
     val Array(txtTrain, txtTest) = txt.repartition(2).randomSplit(Array(0.7, 0.3))
     val (sent2vec, wordVec, wordIndex, labelIndex) =
-      SentenceClassifier.train(txtTrain.cache(), model, 2000, 0.1, 0.06)
+      SentenceClassifier.train(txtTrain.cache(), model, 1000, 0.01, 0.02)
     println(s"wordVec ${wordVec.valuesIterator.map(_.abs).sum / wordVec.length}")
 
     val vecs = txtTest.map { t =>
