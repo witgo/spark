@@ -39,7 +39,7 @@ class Sentence2vecSuite extends FunSuite with MLlibTestSparkContext {
     val word2Vec = new Word2Vec()
     word2Vec.setVectorSize(64).setNumIterations(1)
     val model = word2Vec.fit(txt)
-    val (sent2vec, word2, word2Index) = Sentence2vec.train(txt, model, 5000, 0.1, 0.0025)
+    val (sent2vec, word2, word2Index) = Sentence2vec.train(txt, model, 5000, 0.01, 0.0025)
     println(s"word2 ${word2.valuesIterator.map(_.abs).sum / word2.length}")
     val vecs = txt.map { t =>
       val vec = t.filter(w => word2Index.contains(w)).map(w => word2Index(w)).toArray
