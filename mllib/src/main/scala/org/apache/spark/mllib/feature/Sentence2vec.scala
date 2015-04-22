@@ -279,8 +279,7 @@ object Sentence2vec {
     val mlp = new MLP(mlpLayer, Array(0.2, 0.0))
     val sent2vec = new Sentence2vec(sentenceLayer, mlp, vectorSize, 5)
     val wordBroadcast = dataset.context.broadcast(word2Vec)
-    val momentumSum = new Array[(BDM[Double], BDV[Double])](sent2vec.numLayer)
-    val etaSum = new Array[(BDM[Double], BDV[Double])](sent2vec.numLayer)
+    val gradientSum = new Array[(BDM[Double], BDV[Double])](sent2vec.numLayer)
     for (iter <- 0 until numIter) {
       val sentBroadcast = dataset.context.broadcast(sent2vec)
       val (grad, loss, miniBatchSize) = trainOnce(sentences,
@@ -303,7 +302,7 @@ object Sentence2vec {
           m._2 :/= miniBatchSize.toDouble
         })
         println(s"loss $iter : " + (loss / miniBatchSize))
-        updateParameters(etaSum, momentumSum, grad, sent2vec, iter, learningRate)
+        updateParameters(gradientSum, grad, sent2vec, iter, learningRate)
       }
       sentBroadcast.destroy()
     }
@@ -313,23 +312,19 @@ object Sentence2vec {
   // AdaGrad
   def updateParameters(
     etaSum: Array[(BDM[Double], BDV[Double])],
-    momentumSum: Array[(BDM[Double], BDV[Double])],
     grad: Array[(BDM[Double], BDV[Double])],
     sent2Vec: Sentence2vec,
     iter: Int,
     learningRate: Double,
-    rho: Double = 1 - 1e-2,
-    epsilon: Double = 0.01,
-    gamma: Double = 0.1,
-    momentum: Double = 0.9): Unit = {
+    rho: Double = 1.0,
+    epsilon: Double = 1e-3): Unit = {
+    val lr = math.min(iter / 11.0, 1) * learningRate
     val numSentenceLayer = sent2Vec.numSentenceLayer
-    mergerParameters(momentumSum, grad, momentum)
-    val lr = if (iter < 10) learningRate / (10 - iter) else learningRate
 
     for (i <- 0 until etaSum.length) {
-      if (momentumSum(i) != null) {
-        val g2 = momentumSum(i)._1 :* momentumSum(i)._1
-        val b2 = momentumSum(i)._2 :* momentumSum(i)._2
+      if (grad(i) != null) {
+        val g2 = grad(i)._1 :* grad(i)._1
+        val b2 = grad(i)._2 :* grad(i)._2
         if (etaSum(i) == null) {
           etaSum(i) = (g2, b2)
         } else {
@@ -346,23 +341,21 @@ object Sentence2vec {
       if (etaSum(i) != null) {
         val w = grad(i)._1
         val b = grad(i)._2
-        val mw = momentumSum(i)._1
-        val mb = momentumSum(i)._2
         val dw = etaSum(i)._1
         val db = etaSum(i)._2
         for (gi <- 0 until w.rows) {
           for (gj <- 0 until w.cols) {
-            w(gi, gj) = mw(gi, gj) * gamma / (epsilon + math.sqrt(dw(gi, gj)))
+            w(gi, gj) /= (epsilon + math.sqrt(dw(gi, gj)))
           }
         }
         for (gi <- 0 until b.length) {
-          b(gi) = mb(gi) * gamma / (epsilon + math.sqrt(db(gi)))
+          b(gi) /= (epsilon + math.sqrt(db(gi)))
         }
       }
     }
 
     for (i <- 0 until numSentenceLayer) {
-      if (momentumSum(i) != null) {
+      if (grad(i) != null) {
         val layer = sent2Vec.sentenceLayer(i).asInstanceOf[PartialConnectedLayer]
         brzAxpy(-lr, grad(i)._1, layer.weight)
         brzAxpy(-lr, grad(i)._2, layer.bias)
