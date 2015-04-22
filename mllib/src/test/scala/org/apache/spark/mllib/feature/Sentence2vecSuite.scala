@@ -31,18 +31,15 @@ class Sentence2vecSuite extends FunSuite with MLlibTestSparkContext {
     val sparkHome = sys.props.getOrElse("spark.test.home", fail("spark.test.home is not set!"))
     import org.apache.spark.mllib.feature._
     import breeze.linalg.{norm => brzNorm}
-    var txt = sc.textFile(s"$sparkHome/data/mllib/data.txt").
+    val txt = sc.textFile(s"$sparkHome/data/mllib/data.txt").
       map(_.split(" ")).
       filter(_.length > 4).sample(false, 0.5).
       map(_.toIterable).cache()
     println("txt " + txt.count)
     val word2Vec = new Word2Vec()
-    word2Vec.
-      setVectorSize(64).
-      setNumIterations(1)
+    word2Vec.setVectorSize(64).setNumIterations(1)
     val model = word2Vec.fit(txt)
-    // txt = txt.repartition(32)
-    val (sent2vec, word2, word2Index) = Sentence2vec.train(txt, model, 5000, 0.1, 0.005)
+    val (sent2vec, word2, word2Index) = Sentence2vec.train(txt, model, 5000, 0.1, 0.0025)
     println(s"word2 ${word2.valuesIterator.map(_.abs).sum / word2.length}")
     val vecs = txt.map { t =>
       val vec = t.filter(w => word2Index.contains(w)).map(w => word2Index(w)).toArray
