@@ -42,7 +42,7 @@ class SentenceClassifierSuite extends FunSuite with MLlibTestSparkContext {
     val model = word2Vec.fit(txt.map(_.tail))
     val Array(txtTrain, txtTest) = txt.repartition(2).randomSplit(Array(0.7, 0.3))
     val (sent2vec, wordVec, wordIndex, labelIndex) =
-      SentenceClassifier.train(txtTrain.cache(), model, 1000, 0.01, 0.02)
+      SentenceClassifier.train(txtTrain.cache(), model, 1000, 1.0, 0.02)
     println(s"wordVec ${wordVec.valuesIterator.map(_.abs).sum / wordVec.length}")
 
     val vecs = txtTest.map { t =>
