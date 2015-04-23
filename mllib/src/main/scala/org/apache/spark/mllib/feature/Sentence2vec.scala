@@ -317,7 +317,7 @@ object Sentence2vec {
     iter: Int,
     learningRate: Double,
     rho: Double = 1.0,
-    epsilon: Double = 1e-3): Unit = {
+    epsilon: Double = 1e-6): Unit = {
     val lr = learningRate
     val numSentenceLayer = sent2Vec.numSentenceLayer
 
