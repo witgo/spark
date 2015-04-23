@@ -211,6 +211,7 @@ object SentenceClassifier {
 
     val wordBroadcast = dataset.context.broadcast(wordVec)
     val gradientSum = new Array[(BDM[Double], BDV[Double])](sent2vec.numLayer)
+    val deltaSum = new Array[(BDM[Double], BDV[Double])](sent2vec.numLayer)
     for (iter <- 0 until numIter) {
       val sentBroadcast = dataset.context.broadcast(sent2vec)
       val (grad, loss, miniBatchSize) = trainOnce(sentences,
@@ -233,71 +234,73 @@ object SentenceClassifier {
           m._2 :/= miniBatchSize.toDouble
         })
         println(s"loss $iter : " + (loss / miniBatchSize))
-        updateParameters(gradientSum, grad, sent2vec, iter, learningRate)
+        updateParameters(gradientSum, deltaSum, grad, sent2vec, iter, learningRate)
       }
       sentBroadcast.destroy()
     }
     (sent2vec, wordVec, wordIndex, labelIndex)
   }
 
-  // AdaGrad
   def updateParameters(
-    etaSum: Array[(BDM[Double], BDV[Double])],
+    gradientSum: Array[(BDM[Double], BDV[Double])],
+    deltaSum: Array[(BDM[Double], BDV[Double])],
     grad: Array[(BDM[Double], BDV[Double])],
     sent2Vec: SentenceClassifier,
     iter: Int,
-    learningRate: Double,
-    rho: Double = 1.0,
+    lr: Double,
+    rho: Double = 1 - 1e-2,
     epsilon: Double = 1e-8): Unit = {
-    // val lr = math.min(iter / 11.0, 1) * learningRate
-    val lr = learningRate
     val numSentenceLayer = sent2Vec.numSentenceLayer
+    (0 until gradientSum.length).filter(i => grad(i) != null).foreach { i =>
 
-    for (i <- 0 until etaSum.length) {
-      if (grad(i) != null) {
-        val g2 = grad(i)._1 :* grad(i)._1
-        val b2 = grad(i)._2 :* grad(i)._2
-        if (etaSum(i) == null) {
-          etaSum(i) = (g2, b2)
-        } else {
-          if (rho > 0D && rho < 1D) {
-            etaSum(i)._1 :*= rho
-            etaSum(i)._2 :*= rho
-          }
-          etaSum(i)._1 :+= g2
-          etaSum(i)._2 :+= b2
+      val w = grad(i)._1
+      val b = grad(i)._2
+      if (deltaSum(i) == null) {
+        gradientSum(i) = (BDM.zeros[Double](w.rows, w.cols), BDV.zeros[Double](b.length))
+        deltaSum(i) = (BDM.zeros[Double](w.rows, w.cols), BDV.zeros[Double](b.length))
+      }
+
+      val dw = deltaSum(i)._1
+      val db = deltaSum(i)._2
+      val gw = gradientSum(i)._1
+      val gb = gradientSum(i)._2
+
+      var w2 = w :* w
+      var b2 = b :* b
+      gw :*= rho
+      gb :*= rho
+      brzAxpy(1 - rho, w2, gw)
+      brzAxpy(1 - rho, b2, gb)
+
+      for (gi <- 0 until w.rows) {
+        for (gj <- 0 until w.cols) {
+          val rmsDelta = math.sqrt(epsilon + dw(gi, gj))
+          val rmsGrad = math.sqrt(epsilon + gw(gi, gj))
+          w(gi, gj) *= rmsDelta / rmsGrad
         }
       }
-    }
-    for (i <- 0 until etaSum.length) {
-      if (etaSum(i) != null) {
-        val w = grad(i)._1
-        val b = grad(i)._2
-        val dw = etaSum(i)._1
-        val db = etaSum(i)._2
-        for (gi <- 0 until w.rows) {
-          for (gj <- 0 until w.cols) {
-            w(gi, gj) /= (epsilon + math.sqrt(dw(gi, gj)))
-          }
-        }
-        for (gi <- 0 until b.length) {
-          b(gi) /= (epsilon + math.sqrt(db(gi)))
-        }
+      for (gi <- 0 until b.length) {
+        val rmsDelta = math.sqrt(epsilon + db(gi))
+        val rmsGrad = math.sqrt(epsilon + gb(gi))
+        b(gi) *= rmsDelta / rmsGrad
       }
-    }
 
-    for (i <- 0 until numSentenceLayer) {
-      if (grad(i) != null) {
+      if (i < numSentenceLayer) {
         val layer = sent2Vec.sentenceLayer(i).asInstanceOf[PartialConnectedLayer]
-        brzAxpy(-lr, grad(i)._1, layer.weight)
-        brzAxpy(-lr, grad(i)._2, layer.bias)
+        brzAxpy(-lr, w, layer.weight)
+        brzAxpy(-lr, b, layer.bias)
+      } else {
+        val layer = sent2Vec.mlp.innerLayers(i - numSentenceLayer)
+        brzAxpy(-lr, w, layer.weight)
+        brzAxpy(-lr, b, layer.bias)
       }
-    }
 
-    for (i <- 0 until sent2Vec.mlp.numLayer) {
-      val layer = sent2Vec.mlp.innerLayers(i)
-      brzAxpy(-lr, grad(numSentenceLayer + i)._1, layer.weight)
-      brzAxpy(-lr, grad(numSentenceLayer + i)._2, layer.bias)
+      w2 = w :* w
+      b2 = b :* b
+      dw :*= rho
+      db :*= rho
+      brzAxpy(1 - rho, w2, dw)
+      brzAxpy(1 - rho, b2, db)
     }
 
   }
