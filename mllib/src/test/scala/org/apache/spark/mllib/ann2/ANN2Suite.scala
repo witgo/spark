@@ -59,6 +59,7 @@ class ANN2Suite extends FunSuite with MLlibTestSparkContext {
     val initialWeights = FeedForwardModel(topology, 23124).weights()
     val trainer = new FeedForwardTrainer(topology, 2, 2)
     trainer.SGDOptimizer.setNumIterations(2000)
+    trainer.setWeights(initialWeights)
     val model = trainer.train(rddData)
     //val model = FeedForwardTrainer.train(rddData, 1, 20, topology, initialWeights)
     val predictionAndLabels = rddData.map { case (input, label) =>

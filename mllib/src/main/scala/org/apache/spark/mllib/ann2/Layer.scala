@@ -130,55 +130,6 @@ object AffineLayerModel {
 
 /* Collection of functions and their derivatives for functional layers
 * */
-object ANNFunctions {
-
-  def apply(x: BDM[Double], y: BDM[Double], func: Double => Double): Unit = {
-    var i = 0
-    while (i < x.rows) {
-      var j = 0
-      while (j < x.cols) {
-        y(i, j) = func(x(i,j))
-        j += 1
-      }
-      i += 1
-    }
-  }
-
-  def Sigmoid(x: BDM[Double], y: BDM[Double]): Unit = {
-    def s(z: Double): Double = Bsigmoid(z)
-    ANNFunctions(x, y, s)
-  }
-
-  def SigmoidDerivative(x: BDM[Double], y: BDM[Double]): Unit = {
-    def sd(z: Double): Double = (1 - z) * z
-    ANNFunctions(x, y, sd)
-  }
-
-  def Softmax(x: BDM[Double], y: BDM[Double]): Unit = {
-    var j = 0
-    while (j < x.cols) {
-      var i = 0
-      var sum = 0.0
-      while (i < x.rows) {
-        val res = Bsigmoid(x(i,j))
-        y(i, j) = res
-        sum += res
-        i += 1
-      }
-      i = 0
-      while (i < x.rows) {
-        y(i, j) /= sum
-        i += 1
-      }
-      j += 1
-    }
-  }
-
-  def SoftmaxDerivative(x: BDM[Double], y: BDM[Double]): Unit = {
-    SigmoidDerivative(x, y)
-  }
-}
-
 trait ActivationFunction extends Serializable {
 
   def eval(x: BDM[Double], y: BDM[Double]): Unit
@@ -218,6 +169,43 @@ object ActivationFunction {
 
 }
 
+class SoftmaxFunction extends ActivationFunction {
+  override def eval(x: BDM[Double], y: BDM[Double]): Unit = {
+    var j = 0
+    while (j < x.cols) {
+      var i = 0
+      var sum = 0.0
+      while (i < x.rows) {
+        val res = Bsigmoid(x(i,j))
+        y(i, j) = res
+        sum += res
+        i += 1
+      }
+      i = 0
+      while (i < x.rows) {
+        y(i, j) /= sum
+        i += 1
+      }
+      j += 1
+    }
+  }
+
+  override def crossEntropy(target: BDM[Double], output: BDM[Double], result: BDM[Double]): Double = {
+    def m(o: Double, t: Double): Double = o - t
+    ActivationFunction(target, output, result, m)
+    -Bsum( target :* Blog(output)) / output.cols
+  }
+
+  override def derivative(x: BDM[Double], y: BDM[Double]): Unit = {
+    def sd(z: Double): Double = (1 - z) * z
+    ActivationFunction(x, y, sd)
+  }
+
+  override def squared(target: BDM[Double], output: BDM[Double], result: BDM[Double]): Double = {
+    throw new UnsupportedOperationException("Sorry, squared error is not defined for SoftMax.")
+  }
+}
+
 class SigmoidFunction extends ActivationFunction {
   override def eval(x: BDM[Double], y: BDM[Double]): Unit = {
     def s(z: Double): Double = Bsigmoid(z)
@@ -242,35 +230,35 @@ class SigmoidFunction extends ActivationFunction {
   }
 }
 
+
 /* Functional layer, that is y = f(x)
 * */
-class FunctionalLayer (activationFunction: (BDM[Double], BDM[Double]) => Unit,
-                       activationDerivative: (BDM[Double], BDM[Double]) => Unit) extends Layer {
+class FunctionalLayer (activationFunction: ActivationFunction) extends Layer {
   override def getInstance(weights: Vector, position: Int): LayerModel = getInstance(0L)
 
   override def getInstance(seed: Long): LayerModel =
-    FunctionalLayerModel(activationFunction, activationDerivative)
+    FunctionalLayerModel(activationFunction)
 }
 
 /* Functional layer model. Holds no parameters (weights).
 * */
-class FunctionalLayerModel private (activationFunction: (BDM[Double], BDM[Double]) => Unit,
-                                    activationDerivative: (BDM[Double], BDM[Double]) => Unit
+class FunctionalLayerModel private (val activationFunction: ActivationFunction
                                      ) extends LayerModel {
   val size = 0
 
   private var f: BDM[Double] = null
   private var d: BDM[Double] = null
+  private var e: BDM[Double] = null
 
   override def eval(data: BDM[Double]): BDM[Double] =  {
     if (f == null || f.cols != data.cols) f = new BDM[Double](data.rows, data.cols)
-    activationFunction(data, f)
+    activationFunction.eval(data, f)
     f
   }
 
   override def prevDelta(nextDelta: BDM[Double], input: BDM[Double]): BDM[Double] = {
     if (d == null || d.cols != nextDelta.cols) d = new BDM[Double](nextDelta.rows, nextDelta.cols)
-    activationDerivative(input, d)
+    activationFunction.derivative(input, d)
     d :*= nextDelta
     d
   }
@@ -279,12 +267,23 @@ class FunctionalLayerModel private (activationFunction: (BDM[Double], BDM[Double
     Vectors.dense(new Array[Double](0))
 
   override def weights(): Vector = Vectors.dense(new Array[Double](0))
+
+  def crossEntropy(target: BDM[Double], output: BDM[Double]): (BDM[Double], Double) = {
+    if (e == null || e.cols != output.cols) e = new BDM[Double](output.rows, output.cols)
+    val error = activationFunction.crossEntropy(target, output, e)
+    (e, error)
+  }
+
+  def squared(target: BDM[Double], output: BDM[Double]): (BDM[Double], Double) = {
+    if (e == null || e.cols != output.cols) e = new BDM[Double](output.rows, output.cols)
+    val error = activationFunction.squared(target, output, e)
+    (e, error)
+  }
 }
 
 object FunctionalLayerModel {
-  def apply(activationFunction: (BDM[Double], BDM[Double]) => Unit,
-            activationDerivative:  (BDM[Double], BDM[Double]) => Unit): FunctionalLayerModel = {
-    new FunctionalLayerModel(activationFunction, activationDerivative)
+  def apply(activationFunction: ActivationFunction): FunctionalLayerModel = {
+    new FunctionalLayerModel(activationFunction)
   }
 }
 
@@ -307,9 +306,9 @@ object Topology {
       layers(i * 2) = new AffineLayer(layerSizes(i), layerSizes(i + 1))
       layers(i * 2 + 1) =
         if (softmax && i == layerSizes.length - 2)
-          new FunctionalLayer(ANNFunctions.Softmax, ANNFunctions.SoftmaxDerivative)
+          new FunctionalLayer(new SoftmaxFunction())
         else
-          new FunctionalLayer(ANNFunctions.Sigmoid, ANNFunctions.SigmoidDerivative)
+          new FunctionalLayer(new SigmoidFunction())
     }
     Topology(layers)
   }
@@ -337,8 +336,10 @@ class FeedForwardModel(val layerModels: Array[LayerModel],
     val L = layerModels.length - 1
     // TODO: parametrize error/cost function
     // TODO: remove deltas(L)
-    deltas(L) = error
-    //deltas(L) = new BDM[Double](0,0)()
+    //deltas(L) = error
+    deltas(L) = layerModels.last match {
+      case flm: FunctionalLayerModel => flm.activationFunction.crossEntropy(target, outputs.last, )
+    }
     for (i <- (L - 1) to (0, -1)) {
       deltas(i) = layerModels(i + 1).prevDelta(deltas(i + 1), outputs(i + 1))
     }
@@ -368,6 +369,7 @@ class FeedForwardModel(val layerModels: Array[LayerModel],
     // REAL crossError = Bsum(target :* Blog(target :/ outputs.last)) / realBatchSize
     // TODO: what if zero in log?
     val crossError = - Bsum( target :* Blog(outputs.last)) / realBatchSize
+    println("Errors:" + res + " " + crossError)
     res
   }
 
