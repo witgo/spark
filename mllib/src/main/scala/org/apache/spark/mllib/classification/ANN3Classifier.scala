@@ -27,8 +27,8 @@ import breeze.linalg.{argmax => Bargmax}
 object LabelConverter {
 
   def apply(labeledPoint: LabeledPoint, labelCount: Int) = {
-    val output = Array.fill(labelCount){0.0}
-    output(labeledPoint.label.toInt) = 1.0
+    val output = Array.fill(labelCount){0.1}
+    output(labeledPoint.label.toInt) = 0.9
     (labeledPoint.features, Vectors.dense(output))
   }
 

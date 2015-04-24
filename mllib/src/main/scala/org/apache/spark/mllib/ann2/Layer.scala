@@ -190,9 +190,9 @@ class SoftmaxFunction extends ActivationFunction {
     }
   }
 
-  override def crossEntropy(target: BDM[Double], output: BDM[Double], result: BDM[Double]): Double = {
+  override def crossEntropy(output: BDM[Double], target: BDM[Double], result: BDM[Double]): Double = {
     def m(o: Double, t: Double): Double = o - t
-    ActivationFunction(target, output, result, m)
+    ActivationFunction(output, target, result, m)
     -Bsum( target :* Blog(output)) / output.cols
   }
 
@@ -201,7 +201,7 @@ class SoftmaxFunction extends ActivationFunction {
     ActivationFunction(x, y, sd)
   }
 
-  override def squared(target: BDM[Double], output: BDM[Double], result: BDM[Double]): Double = {
+  override def squared(output: BDM[Double], target: BDM[Double], result: BDM[Double]): Double = {
     throw new UnsupportedOperationException("Sorry, squared error is not defined for SoftMax.")
   }
 }
@@ -212,9 +212,9 @@ class SigmoidFunction extends ActivationFunction {
     ActivationFunction(x, y, s)
   }
 
-  override def crossEntropy(target: BDM[Double], output: BDM[Double], result: BDM[Double]): Double = {
+  override def crossEntropy(output: BDM[Double], target: BDM[Double], result: BDM[Double]): Double = {
     def m(o: Double, t: Double): Double = o - t
-    ActivationFunction(target, output, result, m)
+    ActivationFunction(output, target, result, m)
     -Bsum( target :* Blog(output)) / output.cols
   }
 
@@ -223,9 +223,9 @@ class SigmoidFunction extends ActivationFunction {
     ActivationFunction(x, y, sd)
   }
 
-  override def squared(target: BDM[Double], output: BDM[Double], result: BDM[Double]): Double = {
+  override def squared(output: BDM[Double], target: BDM[Double], result: BDM[Double]): Double = {
     def m(o: Double, t: Double): Double = (o - t) * (1 - o) * o
-    ActivationFunction(target, output, result, m)
+    ActivationFunction(output, target, result, m)
     Bsum(result :* result) / 2 / output.cols
   }
 }
@@ -268,15 +268,15 @@ class FunctionalLayerModel private (val activationFunction: ActivationFunction
 
   override def weights(): Vector = Vectors.dense(new Array[Double](0))
 
-  def crossEntropy(target: BDM[Double], output: BDM[Double]): (BDM[Double], Double) = {
+  def crossEntropy(output: BDM[Double], target: BDM[Double]): (BDM[Double], Double) = {
     if (e == null || e.cols != output.cols) e = new BDM[Double](output.rows, output.cols)
-    val error = activationFunction.crossEntropy(target, output, e)
+    val error = activationFunction.crossEntropy(output, target, e)
     (e, error)
   }
 
-  def squared(target: BDM[Double], output: BDM[Double]): (BDM[Double], Double) = {
+  def squared(output: BDM[Double], target: BDM[Double]): (BDM[Double], Double) = {
     if (e == null || e.cols != output.cols) e = new BDM[Double](output.rows, output.cols)
-    val error = activationFunction.squared(target, output, e)
+    val error = activationFunction.squared(output, target, e)
     (e, error)
   }
 }
@@ -306,7 +306,7 @@ object Topology {
       layers(i * 2) = new AffineLayer(layerSizes(i), layerSizes(i + 1))
       layers(i * 2 + 1) =
         if (softmax && i == layerSizes.length - 2)
-          new FunctionalLayer(new SoftmaxFunction())
+          new FunctionalLayer(new SigmoidFunction())
         else
           new FunctionalLayer(new SigmoidFunction())
     }
@@ -336,10 +336,12 @@ class FeedForwardModel(val layerModels: Array[LayerModel],
     val L = layerModels.length - 1
     // TODO: parametrize error/cost function
     // TODO: remove deltas(L)
-    //deltas(L) = error
-    deltas(L) = layerModels.last match {
-      case flm: FunctionalLayerModel => flm.activationFunction.crossEntropy(target, outputs.last, )
+    val (newE, newError) = layerModels.last match {
+      case flm: FunctionalLayerModel => flm.crossEntropy(outputs.last, target)
+      case _ => throw new UnsupportedOperationException("Non-functional layer not supported at the top")
     }
+    //deltas(L) = newE
+    deltas(L) = error
     for (i <- (L - 1) to (0, -1)) {
       deltas(i) = layerModels(i + 1).prevDelta(deltas(i + 1), outputs(i + 1))
     }
@@ -368,8 +370,9 @@ class FeedForwardModel(val layerModels: Array[LayerModel],
     val res = squaredError / realBatchSize
     // REAL crossError = Bsum(target :* Blog(target :/ outputs.last)) / realBatchSize
     // TODO: what if zero in log?
-    val crossError = - Bsum( target :* Blog(outputs.last)) / realBatchSize
-    println("Errors:" + res + " " + crossError)
+//    val crossError = - Bsum( target :* Blog(outputs.last)) / realBatchSize
+//    println("Errors:" + res + " " + crossError + " " + newError)
+//    res
     res
   }
 
