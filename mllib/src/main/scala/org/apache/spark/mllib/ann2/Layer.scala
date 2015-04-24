@@ -19,7 +19,7 @@ package org.apache.spark.mllib.ann2
 
 import breeze.linalg.
 {DenseMatrix => BDM, Vector => BV, DenseVector => BDV, sum => Bsum, axpy => brzAxpy, *}
-import breeze.numerics.{sigmoid => Bsigmoid}
+import breeze.numerics.{sigmoid => Bsigmoid, log => Blog}
 
 import org.apache.spark.mllib.linalg.{Vector, Vectors}
 import org.apache.spark.mllib.optimization._
@@ -177,8 +177,69 @@ object ANNFunctions {
   def SoftmaxDerivative(x: BDM[Double], y: BDM[Double]): Unit = {
     SigmoidDerivative(x, y)
   }
+}
 
+trait ActivationFunction extends Serializable {
 
+  def eval(x: BDM[Double], y: BDM[Double]): Unit
+
+  def derivative(x: BDM[Double], y: BDM[Double]): Unit
+
+  def crossEntropy(target: BDM[Double], output: BDM[Double], result: BDM[Double]): Double
+
+  def squared(target: BDM[Double], output: BDM[Double], result: BDM[Double]): Double
+}
+
+object ActivationFunction {
+
+  def apply(x: BDM[Double], y: BDM[Double], func: Double => Double): Unit = {
+    var i = 0
+    while (i < x.rows) {
+      var j = 0
+      while (j < x.cols) {
+        y(i, j) = func(x(i,j))
+        j += 1
+      }
+      i += 1
+    }
+  }
+
+  def apply(x1: BDM[Double], x2: BDM[Double], y: BDM[Double], func: (Double, Double) => Double): Unit = {
+    var i = 0
+    while (i < x1.rows) {
+      var j = 0
+      while (j < x1.cols) {
+        y(i, j) = func(x1(i,j), x2(i, j))
+        j += 1
+      }
+      i += 1
+    }
+  }
+
+}
+
+class SigmoidFunction extends ActivationFunction {
+  override def eval(x: BDM[Double], y: BDM[Double]): Unit = {
+    def s(z: Double): Double = Bsigmoid(z)
+    ActivationFunction(x, y, s)
+  }
+
+  override def crossEntropy(target: BDM[Double], output: BDM[Double], result: BDM[Double]): Double = {
+    def m(o: Double, t: Double): Double = o - t
+    ActivationFunction(target, output, result, m)
+    -Bsum( target :* Blog(output)) / output.cols
+  }
+
+  override def derivative(x: BDM[Double], y: BDM[Double]): Unit = {
+    def sd(z: Double): Double = (1 - z) * z
+    ActivationFunction(x, y, sd)
+  }
+
+  override def squared(target: BDM[Double], output: BDM[Double], result: BDM[Double]): Double = {
+    def m(o: Double, t: Double): Double = (o - t) * (1 - o) * o
+    ActivationFunction(target, output, result, m)
+    Bsum(result :* result) / 2 / output.cols
+  }
 }
 
 /* Functional layer, that is y = f(x)
@@ -240,12 +301,15 @@ object Topology {
     new Topology(layers, Array.fill[Double](layers.length)(0D))
   }
 
-  def multiLayerPerceptron(layerSizes: Array[Int]): Topology = {
+  def multiLayerPerceptron(layerSizes: Array[Int], softmax: Boolean = true): Topology = {
     val layers = new Array[Layer]((layerSizes.length - 1) * 2)
     for(i <- 0 until layerSizes.length - 1){
       layers(i * 2) = new AffineLayer(layerSizes(i), layerSizes(i + 1))
       layers(i * 2 + 1) =
-        new FunctionalLayer(ANNFunctions.Sigmoid, ANNFunctions.SigmoidDerivative)
+        if (softmax && i == layerSizes.length - 2)
+          new FunctionalLayer(ANNFunctions.Softmax, ANNFunctions.SoftmaxDerivative)
+        else
+          new FunctionalLayer(ANNFunctions.Sigmoid, ANNFunctions.SigmoidDerivative)
     }
     Topology(layers)
   }
@@ -272,7 +336,9 @@ class FeedForwardModel(val layerModels: Array[LayerModel],
     val error = outputs.last - target
     val L = layerModels.length - 1
     // TODO: parametrize error/cost function
+    // TODO: remove deltas(L)
     deltas(L) = error
+    //deltas(L) = new BDM[Double](0,0)()
     for (i <- (L - 1) to (0, -1)) {
       deltas(i) = layerModels(i + 1).prevDelta(deltas(i + 1), outputs(i + 1))
     }
@@ -295,10 +361,14 @@ class FeedForwardModel(val layerModels: Array[LayerModel],
       offset += gradArray.length
     }
 
-    val outerError = Bsum(error :* error) / 2
+    val squaredError = Bsum(error :* error) / 2
     /* NB! dividing by the number of instances in
      * the batch to be transparent for the optimizer */
-    outerError / realBatchSize
+    val res = squaredError / realBatchSize
+    // REAL crossError = Bsum(target :* Blog(target :/ outputs.last)) / realBatchSize
+    // TODO: what if zero in log?
+    val crossError = - Bsum( target :* Blog(outputs.last)) / realBatchSize
+    res
   }
 
   def weights(): Vector = {
