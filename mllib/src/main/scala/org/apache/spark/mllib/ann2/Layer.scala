@@ -155,7 +155,8 @@ object ActivationFunction {
     }
   }
 
-  def apply(x1: BDM[Double], x2: BDM[Double], y: BDM[Double], func: (Double, Double) => Double): Unit = {
+  def apply(x1: BDM[Double], x2: BDM[Double], y: BDM[Double],
+            func: (Double, Double) => Double): Unit = {
     var i = 0
     while (i < x1.rows) {
       var j = 0
@@ -190,7 +191,8 @@ class SoftmaxFunction extends ActivationFunction {
     }
   }
 
-  override def crossEntropy(output: BDM[Double], target: BDM[Double], result: BDM[Double]): Double = {
+  override def crossEntropy(output: BDM[Double], target: BDM[Double],
+                            result: BDM[Double]): Double = {
     def m(o: Double, t: Double): Double = o - t
     ActivationFunction(output, target, result, m)
     -Bsum( target :* Blog(output)) / output.cols
@@ -212,7 +214,8 @@ class SigmoidFunction extends ActivationFunction {
     ActivationFunction(x, y, s)
   }
 
-  override def crossEntropy(output: BDM[Double], target: BDM[Double], result: BDM[Double]): Double = {
+  override def crossEntropy(output: BDM[Double], target: BDM[Double],
+                            result: BDM[Double]): Double = {
     def m(o: Double, t: Double): Double = o - t
     ActivationFunction(output, target, result, m)
     -Bsum( target :* Blog(output)) / output.cols
@@ -224,9 +227,13 @@ class SigmoidFunction extends ActivationFunction {
   }
 
   override def squared(output: BDM[Double], target: BDM[Double], result: BDM[Double]): Double = {
-    def m(o: Double, t: Double): Double = (o - t) * (1 - o) * o
+    // TODO: make it readable
+    def m(o: Double, t: Double): Double = (o - t)
     ActivationFunction(output, target, result, m)
-    Bsum(result :* result) / 2 / output.cols
+    val e = Bsum(result :* result) / 2 / output.cols
+    def m2(x: Double, o: Double) = x * (o - o * o)
+    ActivationFunction(result, output, result, m2)
+    e
   }
 }
 
@@ -279,6 +286,14 @@ class FunctionalLayerModel private (val activationFunction: ActivationFunction
     val error = activationFunction.squared(output, target, e)
     (e, error)
   }
+
+  def error(output: BDM[Double], target: BDM[Double]): (BDM[Double], Double) = {
+    // TODO: allow user pick error
+    activationFunction match {
+      case sigmoid: SigmoidFunction => squared(output, target)
+      case softmax: SoftmaxFunction => crossEntropy(output, target)
+    }
+  }
 }
 
 object FunctionalLayerModel {
@@ -305,10 +320,11 @@ object Topology {
     for(i <- 0 until layerSizes.length - 1){
       layers(i * 2) = new AffineLayer(layerSizes(i), layerSizes(i + 1))
       layers(i * 2 + 1) =
-        if (softmax && i == layerSizes.length - 2)
+        if (softmax && i == layerSizes.length - 2) {
+          new FunctionalLayer(new SoftmaxFunction())
+        } else {
           new FunctionalLayer(new SigmoidFunction())
-        else
-          new FunctionalLayer(new SigmoidFunction())
+        }
     }
     Topology(layers)
   }
@@ -332,17 +348,15 @@ class FeedForwardModel(val layerModels: Array[LayerModel],
                       realBatchSize: Int): Double = {
     val outputs = forward(data)
     val deltas = new Array[BDM[Double]](layerModels.length)
-    val error = outputs.last - target
     val L = layerModels.length - 1
-    // TODO: parametrize error/cost function
-    // TODO: remove deltas(L)
     val (newE, newError) = layerModels.last match {
-      case flm: FunctionalLayerModel => flm.crossEntropy(outputs.last, target)
-      case _ => throw new UnsupportedOperationException("Non-functional layer not supported at the top")
+      case flm: FunctionalLayerModel => flm.error(outputs.last, target)
+      case _ =>
+        throw new UnsupportedOperationException("Non-functional layer not supported at the top")
     }
-    //deltas(L) = newE
-    deltas(L) = error
-    for (i <- (L - 1) to (0, -1)) {
+    deltas(L) = new BDM[Double](0, 0)
+    deltas(L - 1) = newE
+    for (i <- (L - 2) to (0, -1)) {
       deltas(i) = layerModels(i + 1).prevDelta(deltas(i + 1), outputs(i + 1))
     }
     val grads = new Array[Vector](layerModels.length)
@@ -364,16 +378,7 @@ class FeedForwardModel(val layerModels: Array[LayerModel],
       offset += gradArray.length
     }
 
-    val squaredError = Bsum(error :* error) / 2
-    /* NB! dividing by the number of instances in
-     * the batch to be transparent for the optimizer */
-    val res = squaredError / realBatchSize
-    // REAL crossError = Bsum(target :* Blog(target :/ outputs.last)) / realBatchSize
-    // TODO: what if zero in log?
-//    val crossError = - Bsum( target :* Blog(outputs.last)) / realBatchSize
-//    println("Errors:" + res + " " + crossError + " " + newError)
-//    res
-    res
+    newError
   }
 
   def weights(): Vector = {
