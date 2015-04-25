@@ -230,6 +230,7 @@ object LBFGS extends Logging {
       val regVal = updater.compute(w, Vectors.zeros(n), 0, 1, regParam)._2
 
       val loss = lossSum / numExamples + regVal
+      println(f"loss ${loss}%1.6f")
       /**
        * It will return the gradient part of regularization using updater.
        *
