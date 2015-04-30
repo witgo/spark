@@ -28,6 +28,7 @@ import org.apache.spark.broadcast.Broadcast
 import org.apache.spark.mllib.feature.Sentence2vec.ParamInterval
 import org.apache.spark.mllib.util.MLUtils
 import org.apache.spark.rdd.RDD
+import org.apache.spark.storage.StorageLevel
 import org.apache.spark.util.Utils
 import org.apache.spark.util.random.XORShiftRandom
 
@@ -80,7 +81,7 @@ class Sentence2vec(
     in: BDM[Double],
     output: Array[BDM[Double]],
     param: ParamInterval): Unit = {
-    val k = 2
+    val k = 5
     val sentenceSize = sentence.size
     var randomize = new Array[Int](sentenceSize)
     Array.copy(sentence, 0, randomize, 0, sentenceSize)
@@ -188,7 +189,7 @@ class Sentence2vec(
 
 object Sentence2vec {
 
-  case class ParamInterval(
+  private[mllib] case class ParamInterval(
     var layerParam: Array[(BDM[Double], BDV[Double])],
     var wordParam: BDV[Double],
     var miniBatchSize: Long,
@@ -215,15 +216,15 @@ object Sentence2vec {
 
   @transient private lazy val tableReverseOrdering = tableOrdering.reverse
 
-  type Table = (Array[Int], Array[Int], Array[Double])
+  private[mllib] type Table = (Array[Int], Array[Int], Array[Double])
 
-  def generateAlias(sv: BV[Double], sum: Double): Table = {
+  private[mllib] def generateAlias(sv: BV[Double], sum: Double): Table = {
     val used = sv.activeSize
     val probs = sv.activeIterator.slice(0, used)
     generateAlias(probs, used, sum)
   }
 
-  def generateAlias(
+  private[mllib] def generateAlias(
     probs: Iterator[(Int, Double)],
     used: Int,
     sum: Double): Table = {
@@ -278,7 +279,7 @@ object Sentence2vec {
     table
   }
 
-  def sampleAlias(gen: Random, table: Table): Int = {
+  private[mllib] def sampleAlias(gen: Random, table: Table): Int = {
     val l = table._1.length
     val bin = gen.nextInt(l)
     val p = table._3(bin)
@@ -289,7 +290,7 @@ object Sentence2vec {
     }
   }
 
-  def termTable(dataSet: RDD[Array[Int]]): Table = {
+  private[mllib] def termTable(dataSet: RDD[Array[Int]]): Table = {
     val probs = dataSet.flatMap(t => t.toSeq.map(w => (w, 1D))).reduceByKey(_ + _).
       collect().sortWith((a, b) => a._2 > b._2)
     var sum = 0.0
@@ -304,12 +305,27 @@ object Sentence2vec {
     learningRate: Double,
     fraction: Double): (Sentence2vec, BDV[Double], Map[String, Int]) = {
     val minCount = 5
-    val word2Index = dataSet.flatMap { t => t.toSeq.map(w => (w, 1D))
+    val word2Index = dataSet.flatMap { t =>
+      t.toSeq.map(w => (w, 1D))
     }.reduceByKey(_ + _).filter(_._2 > minCount).map(_._1).collect().zipWithIndex.toMap
     val sentences = dataSet.map(_.filter(w => word2Index.contains(w))).filter(_.size > 4).
-      map(w => w.map(t => word2Index(t)).toArray)
-    val word2Vec = BDV.rand[Double](vectorSize * word2Index.size, Rand.gaussian)
+      map(w => w.map(t => word2Index(t)).toArray).persist(StorageLevel.MEMORY_AND_DISK)
+    val (sent2vec, word2Vec) = trainSentences(sentences, vectorSize, numIter, learningRate, fraction)
+    sentences.unpersist(blocking = false)
+    (sent2vec, word2Vec, word2Index)
+  }
+
+  def trainSentences(
+    sentences: RDD[Array[Int]],
+    vectorSize: Int,
+    numIter: Int,
+    learningRate: Double,
+    fraction: Double): (Sentence2vec, BDV[Double]) = {
+    val sc = sentences.context
+    val termSize = sentences.map(_.max).max + 1
+    val word2Vec = BDV.rand[Double](vectorSize * termSize, Rand.gaussian)
     word2Vec :*= 1e-2
+
     val sentenceLayer: Array[BaseLayer] = new Array[BaseLayer](4)
     sentenceLayer(0) = new TanhSentenceInputLayer(64, 7, vectorSize)
     sentenceLayer(1) = new DynamicKMaxSentencePooling(6, 0.5)
@@ -329,13 +345,14 @@ object Sentence2vec {
 
     val gradientSum = new Array[(BDM[Double], BDV[Double])](sent2vec.numLayer)
     val wordGradSum: BDV[Double] = BDV.zeros[Double](word2Vec.length)
-    val aliasTableBroadcast = dataSet.context.broadcast(termTable(sentences))
+    val aliasTableBroadcast = sc.broadcast(termTable(sentences))
 
     for (iter <- 0 until numIter) {
-      val word2VecBroadcast = dataSet.context.broadcast(word2Vec)
-      val sentBroadcast = dataSet.context.broadcast(sent2vec)
+      val word2VecBroadcast = sc.broadcast(word2Vec)
+      val sentBroadcast = sc.broadcast(sent2vec)
       val ParamInterval(grad, wordGrad, miniBatchSize, loss) = trainOnce(sentences,
         sentBroadcast, word2VecBroadcast, aliasTableBroadcast, iter, fraction)
+
       if (Utils.random.nextDouble() < 1e-1) {
         println(s"word2Vec: " + word2Vec.valuesIterator.map(_.abs).sum / word2Vec.size)
         sentenceLayer.zipWithIndex.foreach { case (b, i) =>
@@ -356,13 +373,14 @@ object Sentence2vec {
         println(s"loss $iter : " + (loss / miniBatchSize))
         updateParameters(gradientSum, grad, wordGradSum, wordGrad, word2Vec, sent2vec, iter, learningRate)
       }
-      sentBroadcast.destroy()
+      sentBroadcast.destroy(blocking = false)
+      word2VecBroadcast.destroy(blocking = false)
     }
-    (sent2vec, word2Vec, word2Index)
+    (sent2vec, word2Vec)
   }
 
   // AdaGrad
-  def updateParameters(
+  private[mllib] def updateParameters(
     etaSum: Array[(BDM[Double], BDV[Double])],
     grad: Array[(BDM[Double], BDV[Double])],
     wordGradSum: BDV[Double],
@@ -428,35 +446,30 @@ object Sentence2vec {
     }
   }
 
-  def mergerParam(
+  private[mllib] def mergerParam(
     a: Array[(BDM[Double], BDV[Double])],
-    b: Array[(BDM[Double], BDV[Double])],
-    momentum: Double = 1.0): Unit = {
+    b: Array[(BDM[Double], BDV[Double])]): Unit = {
     for (i <- 0 until a.length) {
       if (a(i) == null) {
         a(i) = b(i)
       } else if (b(i) != null) {
-        if (momentum < 1.0) {
-          a(i)._1 :*= momentum
-          a(i)._2 :*= momentum
-        }
         a(i)._1 :+= b(i)._1
         a(i)._2 :+= b(i)._2
       }
     }
   }
 
-  def trainOnce(
-    dataset: RDD[Array[Int]],
+  private[mllib] def trainOnce(
+    dataSet: RDD[Array[Int]],
     sent2Vec: Broadcast[Sentence2vec],
     word2Vec: Broadcast[BDV[Double]],
     aliasTableBroadcast: Broadcast[Table],
     iter: Int,
     fraction: Double): ParamInterval = {
-    dataset.context.broadcast()
+    dataSet.context.broadcast()
     val numLayer = sent2Vec.value.numLayer
     val zeroValue = ParamInterval(new Array[(BDM[Double], BDV[Double])](numLayer), null, 0, 0)
-    dataset.sample(false, fraction).treeAggregate(zeroValue)(seqOp = (c, v) => {
+    dataSet.sample(false, fraction).treeAggregate(zeroValue)(seqOp = (c, v) => {
       val s = sent2Vec.value
       s.setSeed(Utils.random.nextLong())
       s.setWord2Vec(word2Vec.value).setAliasTable(aliasTableBroadcast.value)
