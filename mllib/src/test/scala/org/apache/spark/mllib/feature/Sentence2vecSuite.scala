@@ -17,29 +17,18 @@
 
 package org.apache.spark.mllib.feature
 
+import breeze.linalg.functions.euclideanDistance
+import org.apache.spark.mllib.util.MLlibTestSparkContext
 import org.scalatest.FunSuite
 
-import org.apache.spark.mllib.util.MLlibTestSparkContext
-
-import org.apache.spark.SparkContext._
-import breeze.linalg.{norm => brzNorm}
-import breeze.linalg.functions.euclideanDistance
-
 class Sentence2vecSuite extends FunSuite with MLlibTestSparkContext {
-
-  test("Sentence2vec") {
+  test("Sentence2vec docs") {
     val sparkHome = sys.props.getOrElse("spark.test.home", fail("spark.test.home is not set!"))
-    import org.apache.spark.mllib.feature._
-    import breeze.linalg.{norm => brzNorm}
-    val txt = sc.textFile(s"$sparkHome/data/mllib/data.txt").
-      map(_.split(" ")).
-      filter(_.length > 4).sample(false, 0.5).
-      map(_.toIterable).cache()
+    // http://cogcomp.cs.illinois.edu/Data/QA/QC/train_5500.label
+    val txt = sc.textFile(s"$sparkHome/data/mllib/sst/train_5500.label").
+      map(line => line.split(":").last.split(" ").tail).filter(_.length > 4).map(_.toIterable).cache()
     println("txt " + txt.count)
-    val word2Vec = new Word2Vec()
-    word2Vec.setVectorSize(64).setNumIterations(1)
-    val model = word2Vec.fit(txt)
-    val (sent2vec, word2, word2Index) = Sentence2vec.train(txt, model, 5000, 0.01, 0.0025)
+    val (sent2vec, word2, word2Index) = Sentence2vec.train(txt, 64, 5000, 0.05, 0.01)
     println(s"word2 ${word2.valuesIterator.map(_.abs).sum / word2.length}")
     val vecs = txt.map { t =>
       val vec = t.filter(w => word2Index.contains(w)).map(w => word2Index(w)).toArray
