@@ -28,7 +28,7 @@ class Sentence2vecSuite extends FunSuite with MLlibTestSparkContext {
     val txt = sc.textFile(s"$sparkHome/data/mllib/sst/train_5500.label").
       map(line => line.split(":").last.split(" ").tail).filter(_.length > 4).map(_.toIterable).cache()
     println("txt " + txt.count)
-    val (sent2vec, word2, word2Index) = Sentence2vec.train(txt, 64, 5000, 0.05, 0.01)
+    val (sent2vec, word2, word2Index) = Sentence2vec.train(txt, 64, 1000, 0.05, 0.01)
     println(s"word2 ${word2.valuesIterator.map(_.abs).sum / word2.length}")
     val vecs = txt.map { t =>
       val vec = t.filter(w => word2Index.contains(w)).map(w => word2Index(w)).toArray
@@ -41,11 +41,36 @@ class Sentence2vecSuite extends FunSuite with MLlibTestSparkContext {
     vecs.takeSample(false, 10).foreach { case (text, vec) =>
       println(s"${text.mkString(" ")}")
       vecs.map(v => {
-        // 余弦相似度
         val sim: Double = euclideanDistance(v._2, vec)
         (sim, v._1)
       }).sortByKey(true).take(4).foreach(t => println(s"${t._1} =>${t._2.mkString(" ")} \n"))
     }
 
+  }
+  ignore("dealInfo") {
+    import breeze.linalg.functions._
+    import org.apache.spark.mllib.feature._
+    val deal2vecPath = "/input/lbs/recommend/toona/deal2vec/"
+    val deals = sc.textFile(deal2vecPath).map { line =>
+      line.split(" ")
+    }.filter(_.length > 3).map(_.toIterable).repartition(72).persist()
+    deals.count()
+    val (sent2vec, word2, word2Index) = Sentence2vec.train(deals, 100, 4000, 0.05, 2e-3)
+    println(s"word2 ${word2.valuesIterator.map(_.abs).sum / word2.length}")
+    val vecs = deals.map { t =>
+      val vec = t.filter(w => word2Index.contains(w)).map(w => word2Index(w)).toArray
+      (t, vec)
+    }.filter(_._2.length > 4).map { sent =>
+      sent2vec.setWord2Vec(word2)
+      val vec = sent2vec.predict(sent._2)
+      (sent._1, vec)
+    }.cache()
+    vecs.takeSample(false, 10).foreach { case (text, vec) =>
+      println(s"${text.mkString(" ")}")
+      vecs.map(v => {
+        val sim: Double = euclideanDistance(v._2, vec)
+        (sim, v._1)
+      }).filter(_._1 != 0.0).sortByKey(true).take(6).foreach(t => println(s"${t._1} =>${t._2.mkString(" ")} \n"))
+    }
   }
 }
