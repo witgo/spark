@@ -30,6 +30,8 @@ import org.apache.spark.util.random.XORShiftRandom
 
 import LDAUtils._
 
+import scala.collection.mutable.ArrayBuffer
+
 class LDAModel private[mllib](
   private[mllib] val gtc: BDV[Double],
   private[mllib] val ttc: Array[BSV[Double]],
@@ -284,7 +286,7 @@ object LDAModel {
 
 private[mllib] object LDAUtils {
 
-  type Table = (Array[Int], Array[Int], Array[Double])
+  type Table = (ArrayBuffer[Int], ArrayBuffer[Int], ArrayBuffer[Double])
 
   @transient private lazy val tableOrdering = new scala.math.Ordering[(Int, Double)] {
     override def compare(x: (Int, Double), y: (Int, Double)): Int = {
@@ -294,18 +296,36 @@ private[mllib] object LDAUtils {
 
   @transient private lazy val tableReverseOrdering = tableOrdering.reverse
 
-  def generateAlias(sv: BV[Double], sum: Double): Table = {
+  def generateAlias(sv: BV[Double], sum: Double, tableCache:Option[Table] = None): Table = {
     val used = sv.activeSize
     val probs = sv.activeIterator.slice(0, used)
-    generateAlias(probs, used, sum)
+    generateAlias(probs, used, sum, tableCache)
   }
 
   def generateAlias(
     probs: Iterator[(Int, Double)],
     used: Int,
-    sum: Double): Table = {
+    sum: Double, tableCache:Option[Table]): Table = {
     val pMean = 1.0 / used
-    val table = (new Array[Int](used), new Array[Int](used), new Array[Double](used))
+    val table = tableCache.getOrElse(new ArrayBuffer[Int](used),
+                                     new ArrayBuffer[Int](used),
+                                     new ArrayBuffer[Double](used))
+    // reset and resize table cache
+    for (i <- 0 until Math.min(used, table._1.length)) {
+      table._1(i) = 0
+      table._2(i) = 0
+      table._3(i) = 0.0
+    }
+    if (used > table._1.length) {
+      val pad = 0 until (used - table._1.length)
+      table._1 ++= pad.map(_=>0)
+      table._2 ++= pad.map(_=>0)
+      table._3 ++= pad.map(_=>0.0)
+    } else {
+      table._1.reduceToSize(used)
+      table._2.reduceToSize(used)
+      table._3.reduceToSize(used)
+    }
 
     val lq = new JPriorityQueue[(Int, Double)](used, tableOrdering)
     val hq = new JPriorityQueue[(Int, Double)](used, tableReverseOrdering)

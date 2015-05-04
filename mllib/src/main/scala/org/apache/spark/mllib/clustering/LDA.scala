@@ -17,7 +17,6 @@
 
 package org.apache.spark.mllib.clustering
 
-import java.lang.ref.SoftReference
 import java.util.Random
 
 import breeze.linalg.{DenseVector => BDV, SparseVector => BSV, sum => brzSum}
@@ -32,11 +31,12 @@ import org.apache.spark.rdd.RDD
 import org.apache.spark.serializer.KryoRegistrator
 import org.apache.spark.storage.StorageLevel
 import org.apache.spark.SparkContext._
-import org.apache.spark.util.collection.AppendOnlyMap
 import org.apache.spark.util.random.XORShiftRandom
 
 import LDA._
 import LDAUtils._
+
+import scala.collection.mutable.ArrayBuffer
 
 class LDA private[mllib](
   @transient private var corpus: Graph[VD, ED],
@@ -351,7 +351,14 @@ object LDA {
     val nweGraph = graph.mapTriplets(
       (pid, iter) => {
         val gen = new XORShiftRandom(parts * innerIter + pid)
-        val wordTableCache = new AppendOnlyMap[VertexId, SoftReference[(Double, Table)]]()
+        // table is a per term data structure
+        // in GraphX, edges in a partition are clustered by source IDs (term id in this case)
+        // so, use below simple cache to avoid calculating table each time
+        val lastTable = (new ArrayBuffer[Int](numTopics.toInt),
+                         new ArrayBuffer[Int](numTopics.toInt),
+                         new ArrayBuffer[Double](numTopics.toInt))
+        var lastVid = None.asInstanceOf[Option[VertexId]]
+        var lastWsum = 0.0
         val dv = tDense(totalTopicCounter, numTokens, numTerms, alpha, alphaAS, beta)
         val dData = new Array[Double](numTopics.toInt)
         val t = generateAlias(dv._2, dv._1)
@@ -369,10 +376,12 @@ object LDA {
                 termTopicCounter.synchronized {
                   dSparse(totalTopicCounter, termTopicCounter, docTopicCounter, dData,
                     currentTopic, numTokens, numTerms, alpha, alphaAS, beta)
-                  val (wSum, w) = wordTable(x => x == null || x.get() == null || gen.nextDouble() < 1e-4,
-                    wordTableCache, totalTopicCounter, termTopicCounter,
-                    termId, numTokens, numTerms, alpha, alphaAS, beta)
-                  val newTopic = tokenSampling(gen, t, tSum, w, termTopicCounter, wSum,
+                  if (lastVid != Some(termId) || gen.nextDouble() < 1e-4) {
+                    lastWsum = wordTable(lastTable, totalTopicCounter, termTopicCounter,
+                                         termId, numTokens, numTerms, alpha, alphaAS, beta)
+                    lastVid = Some(termId)
+                  }
+                  val newTopic = tokenSampling(gen, t, tSum, lastTable, termTopicCounter, lastWsum,
                     docTopicCounter, dData, currentTopic)
 
                   if (newTopic != currentTopic) {
@@ -645,8 +654,7 @@ object LDA {
   }
 
   private def wordTable(
-    updateFunc: SoftReference[(Double, Table)] => Boolean,
-    cacheMap: AppendOnlyMap[VertexId, SoftReference[(Double, Table)]],
+    table:Table,
     totalTopicCounter: BDV[Count],
     termTopicCounter: VD,
     termId: VertexId,
@@ -654,17 +662,11 @@ object LDA {
     numTerms: Double,
     alpha: Double,
     alphaAS: Double,
-    beta: Double): (Double, Table) = {
-    val cacheW = cacheMap(termId)
-    if (!updateFunc(cacheW)) {
-      cacheW.get
-    } else {
+    beta: Double): Double = {
       val sv = wSparse(totalTopicCounter, termTopicCounter,
         numTokens, numTerms, alpha, alphaAS, beta)
-      val w = (sv._1, generateAlias(sv._2, sv._1))
-      cacheMap.update(termId, new SoftReference(w))
-      w
-    }
+      generateAlias(sv._2, sv._1, Some(table))
+      sv._1
   }
 
   private def sampleSV(gen: Random, table: Table, sv: VD, currentTopic: Int): Int = {
