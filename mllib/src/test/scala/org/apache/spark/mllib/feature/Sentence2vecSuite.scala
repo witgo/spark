@@ -65,6 +65,7 @@ class Sentence2vecSuite extends FunSuite with MLlibTestSparkContext {
       val vec = sent2vec.predict(sent._2)
       (sent._1, vec)
     }.cache()
+
     vecs.takeSample(false, 10).foreach { case (text, vec) =>
       println(s"${text.mkString(" ")}")
       vecs.map(v => {
@@ -72,5 +73,7 @@ class Sentence2vecSuite extends FunSuite with MLlibTestSparkContext {
         (sim, v._1)
       }).filter(_._1 != 0.0).sortByKey(true).take(6).foreach(t => println(s"${t._1} =>${t._2.mkString(" ")} \n"))
     }
+
+
   }
 }

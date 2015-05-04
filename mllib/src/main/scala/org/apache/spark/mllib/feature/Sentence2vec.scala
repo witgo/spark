@@ -85,7 +85,7 @@ class Sentence2vec(
     val sentenceSize = sentence.size
     var randomize = new Array[Int](sentenceSize)
     Array.copy(sentence, 0, randomize, 0, sentenceSize)
-    randomize = Utils.randomizeInPlace(randomize, rand).slice(0, 3)
+    // randomize = Utils.randomizeInPlace(randomize, rand).slice(0, 3)
     var sampleSize = 0.0
     var loss = 0.0
     for (word <- randomize) {
@@ -326,23 +326,8 @@ object Sentence2vec {
     val word2Vec = BDV.rand[Double](vectorSize * termSize, Rand.gaussian)
     word2Vec :*= 1e-2
 
-    val sentenceLayer: Array[BaseLayer] = new Array[BaseLayer](4)
-    sentenceLayer(0) = new TanhSentenceInputLayer(64, 7, vectorSize)
-    sentenceLayer(1) = new DynamicKMaxSentencePooling(6, 0.5)
-    val layer = new TanhSentenceLayer(64, vectorSize / 4, 5)
-    if (layer.outChannels > 1 && layer.inChannels > 1) {
-      val s = (layer.outChannels * 0.5).floor.toInt
-      for (i <- 0 until layer.inChannels) {
-        for (j <- 0 until s) {
-          val offset = (i + j) % layer.outChannels
-          layer.connTable(i, offset) = 0.0
-        }
-      }
-    }
-    sentenceLayer(2) = layer
-    sentenceLayer(3) = new KMaxSentencePooling(4)
+    val sentenceLayer = initLayer(vectorSize, Array(64, vectorSize / 2), Array(7, 2))
     val sent2vec = new Sentence2vec(sentenceLayer, vectorSize)
-
     val gradientSum = new Array[(BDM[Double], BDV[Double])](sent2vec.numLayer)
     val wordGradSum: BDV[Double] = BDV.zeros[Double](word2Vec.length)
     val aliasTableBroadcast = sc.broadcast(termTable(sentences))
@@ -377,6 +362,39 @@ object Sentence2vec {
       word2VecBroadcast.destroy(blocking = false)
     }
     (sent2vec, word2Vec)
+  }
+
+  def initLayer(vectorSize: Int, outChannels: Array[Int], kernels: Array[Int]): Array[BaseLayer] = {
+    val numLayer = outChannels.length * 2
+    require(outChannels.last * kernels.last == vectorSize,
+      s"The dimensions of the last payer output must be equal to $vectorSize")
+    val sentenceLayer: Array[BaseLayer] = new Array[BaseLayer](numLayer)
+    for (i <- 0 until outChannels.length) {
+      val layerOutChannels = outChannels(i)
+      val layerKernels = kernels(i)
+      val layer = if (i == 0) {
+        new TanhSentenceInputLayer(layerOutChannels, layerKernels, vectorSize)
+      } else {
+        new TanhSentenceLayer(outChannels(i - 1), layerOutChannels, layerKernels)
+      }
+      if (i == 2 && layer.outChannels > 1 && layer.inChannels > 1) {
+        val s = (layer.outChannels * 0.5).floor.toInt
+        for (i <- 0 until layer.inChannels) {
+          for (j <- 0 until s) {
+            val offset = (i + j) % layer.outChannels
+            layer.connTable(i, offset) = 0.0
+          }
+        }
+      }
+      sentenceLayer(i * 2) = layer
+      val poolingLayer = if (i == outChannels.length - 1) {
+        new KMaxSentencePooling(layerKernels)
+      } else {
+        new DynamicKMaxSentencePooling(layerKernels - 1, 0.5)
+      }
+      sentenceLayer(i * 2 + 1) = poolingLayer
+    }
+    sentenceLayer
   }
 
   // AdaGrad
