@@ -15,12 +15,10 @@
  * limitations under the License.
  */
 
-package org.apache.spark.mllib.ann2
+package org.apache.spark.mllib.ann
 
-import breeze.linalg.
-{DenseMatrix => BDM, Vector => BV, DenseVector => BDV, sum => Bsum, axpy => brzAxpy, *}
-import breeze.numerics.{sigmoid => Bsigmoid, log => Blog}
-
+import breeze.linalg.{*, DenseMatrix => BDM, DenseVector => BDV, Vector => BV, axpy => brzAxpy, sum => Bsum}
+import breeze.numerics.{log => Blog, sigmoid => Bsigmoid}
 import org.apache.spark.mllib.linalg.{Vector, Vectors}
 import org.apache.spark.mllib.optimization._
 import org.apache.spark.rdd.RDD
@@ -516,14 +514,14 @@ class FeedForwardTrainer (topology: Topology, val inputSize: Int,
   private var optimizer: Optimizer = LBFGSOptimizer.setConvergenceTol(1e-4).setNumIterations(100)
 
 
-  def getWeights = _weights
+  def getWeights: Vector = _weights
 
-  def setWeights(value: Vector): this.type = {
+  def setWeights(value: Vector): FeedForwardTrainer = {
     _weights = value
     this
   }
 
-  def setBatchSize(value: Int): this.type = {
+  def setBatchSize(value: Int): FeedForwardTrainer = {
     _batchSize = value
     dataStacker = new DataStacker(value, inputSize, outputSize)
     this
@@ -541,13 +539,13 @@ class FeedForwardTrainer (topology: Topology, val inputSize: Int,
     lbfgs
   }
 
-  def setUpdater(value: Updater): this.type =  {
+  def setUpdater(value: Updater): FeedForwardTrainer =  {
     _updater = value
     updateUpdater(value)
     this
   }
 
-  def setGradient(value: Gradient): this.type = {
+  def setGradient(value: Gradient): FeedForwardTrainer = {
     _gradient = value
     updateGradient(value)
     this
@@ -576,27 +574,4 @@ class FeedForwardTrainer (topology: Topology, val inputSize: Int,
     FeedForwardModel(topology, newWeights)
   }
 
-}
-
-/* MLlib-style object for the collection of train methods
- *
- */
-object FeedForwardTrainer {
-
-  def train(trainingRDD: RDD[(Vector, Vector)],
-            batchSize: Int,
-            maxIterations: Int,
-            topology: Topology,
-            initialWeights: Vector) = {
-//    new FeedForwardNetwork(topology, maxIterations, 1e-4, inputSize, outputSize, batchSize).
-//      run(trainingRDD, initialWeights)
-    val dataSample = trainingRDD.first()
-    val inputSize = dataSample._1.size
-    val outputSize = dataSample._2.size
-    val trainer = new FeedForwardTrainer(topology, inputSize, outputSize).
-      setBatchSize(batchSize).setWeights(initialWeights)
-    trainer.LBFGSOptimizer.setNumIterations(maxIterations).setConvergenceTol(1e-4)
-    //trainer.SGDOptimizer.setNumIterations(maxIterations)
-    trainer.train(trainingRDD)
-  }
 }

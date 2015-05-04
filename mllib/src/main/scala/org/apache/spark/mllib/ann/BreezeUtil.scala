@@ -15,11 +15,10 @@
  * limitations under the License.
  */
 
-package org.apache.spark.mllib.ann2
-
-import com.github.fommil.netlib.BLAS.{getInstance => NativeBLAS}
+package org.apache.spark.mllib.ann
 
 import breeze.linalg.{DenseMatrix => BDM, DenseVector => BDV}
+import com.github.fommil.netlib.BLAS.{getInstance => NativeBLAS}
 
 
 object BreezeUtil {

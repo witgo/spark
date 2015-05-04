@@ -17,6 +17,7 @@
 
 package org.apache.spark.mllib.classification
 
+import org.apache.spark.mllib.ann.{FeedForwardTrainer, FeedForwardModel, Topology}
 import org.apache.spark.mllib.linalg.Vectors
 import org.apache.spark.mllib.regression.LabeledPoint
 import org.apache.spark.mllib.util.MLlibTestSparkContext
@@ -35,9 +36,15 @@ class ANNClassifierSuite extends FunSuite with MLlibTestSparkContext {
     val data = inputs.zip(outputs).map{ case(input, output) =>
       new LabeledPoint(output, Vectors.dense(input))}
     val rddData = sc.parallelize(data, 2)
-    val hiddenLayerTopology = Array[Int]{5}
-    val initialWeights = ANNClassifier.randomWeights(rddData, hiddenLayerTopology, 0x01234567)
-    val model = ANNClassifier.train(rddData, 1, hiddenLayerTopology, initialWeights, 200, 1.0, 1e-4)
+    val layers = Array[Int](2, 5, 2)
+    val topology = Topology.multiLayerPerceptron(layers)
+    val initialWeights = FeedForwardModel(topology, 0x01234567).weights()
+    val trainer = new FeedForwardTrainer(topology, 2, 2)
+    trainer.setWeights(initialWeights).setBatchSize(1)
+    trainer.LBFGSOptimizer.setNumIterations(200).setConvergenceTol(1e-4)
+    val model = new ANNClassifier(trainer).train(rddData)
+    //val initialWeights = ANNClassifier.randomWeights(rddData, hiddenLayerTopology, 0x01234567)
+    //val model = ANNClassifier.train(rddData, 1, hiddenLayerTopology, initialWeights, 200, 1.0, 1e-4)
     val predictionAndLabels = rddData.map(lp =>
       (model.predict(lp.features), lp.label)).collect()
     assert(predictionAndLabels.forall { case(p, l) =>
