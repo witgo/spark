@@ -171,11 +171,20 @@ object ActivationFunction {
 class SoftmaxFunction extends ActivationFunction {
   override def eval(x: BDM[Double], y: BDM[Double]): Unit = {
     var j = 0
+    // find max value to make sure later that exponent is computable
     while (j < x.cols) {
       var i = 0
-      var sum = 0.0
+      var max = Double.MinValue
       while (i < x.rows) {
-        val res = Math.exp(x(i,j))
+        if (x(i, j) > max) {
+          max = x(i, j)
+        }
+        i += 1
+      }
+      var sum = 0.0
+      i = 0
+      while (i < x.rows) {
+        val res = Math.exp(x(i,j) - max)
         y(i, j) = res
         sum += res
         i += 1
