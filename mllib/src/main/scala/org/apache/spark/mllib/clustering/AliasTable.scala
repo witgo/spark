@@ -28,6 +28,8 @@ private[mllib] class AliasTable(initUsed: Int) extends Serializable {
   private var _p: Array[Double] = new Array[Double](initUsed)
   private var _used = initUsed
 
+  def l: Array[Int] = _l
+
   def h: Array[Int] = _h
 
   def p: Array[Double] = _p
@@ -37,13 +39,6 @@ private[mllib] class AliasTable(initUsed: Int) extends Serializable {
   def length: Int = size
 
   def size: Int = l.length
-
-  def l: Array[Int] = _l
-
-  def setUsed(newUsed: Int): this.type = {
-    _used = newUsed
-    this
-  }
 
   def sampleAlias(gen: Random): Int = {
     val bin = gen.nextInt(_used)
@@ -55,18 +50,13 @@ private[mllib] class AliasTable(initUsed: Int) extends Serializable {
     }
   }
 
-  def resize(newSize: Int): this.type = {
+  private[AliasTable] def reset(newSize: Int): this.type = {
     if (_l.length < newSize) {
-      val newL = new Array[Int](newSize)
-      Array.copy(_l, 0, newL, 0, _l.length)
-      _l = newL
-      val newH = new Array[Int](newSize)
-      Array.copy(_h, 0, newH, 0, _h.length)
-      _h = newH
-      val newP = new Array[Double](newSize)
-      Array.copy(_p, 0, newP, 0, _p.length)
-      _p = newP
+      _l = new Array[Int](newSize)
+      _h = new Array[Int](newSize)
+      _p = new Array[Double](newSize)
     }
+    _used = newSize
     this
   }
 }
@@ -96,7 +86,7 @@ private[mllib] object AliasTable {
     sum: Double,
     used: Int,
     table: AliasTable): AliasTable = {
-    table.resize(used).setUsed(used)
+    table.reset(used)
     val pMean = 1.0 / used
     val lq = new JPriorityQueue[(Int, Double)](used, tableOrdering)
     val hq = new JPriorityQueue[(Int, Double)](used, tableReverseOrdering)
