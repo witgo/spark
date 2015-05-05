@@ -354,8 +354,7 @@ object LDA {
         // table is a per term data structure
         // in GraphX, edges in a partition are clustered by source IDs (term id in this case)
         // so, use below simple cache to avoid calculating table each time
-        val lastTable = AliasTable(new Array[Int](numTopics.toInt), new Array[Int](numTopics.toInt),
-          new Array[Double](numTopics.toInt), numTopics.toInt)
+        val lastTable = new AliasTable(numTopics.toInt)
         var lastVid: VertexId = -1
         var lastWSum = 0.0
         val dv = tDense(totalTopicCounter, numTokens, numTerms, alpha, alphaAS, beta)
