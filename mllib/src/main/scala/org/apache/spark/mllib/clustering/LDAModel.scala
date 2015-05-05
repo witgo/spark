@@ -19,7 +19,6 @@ package org.apache.spark.mllib.clustering
 
 import java.lang.ref.SoftReference
 import java.util.Random
-import java.util.{PriorityQueue => JPriorityQueue}
 
 import breeze.linalg.{Vector => BV, DenseVector => BDV, SparseVector => BSV,
 sum => brzSum, norm => brzNorm}
@@ -37,25 +36,24 @@ class LDAModel private[mllib](
   val beta: Double,
   val alphaAS: Double) extends Serializable {
 
-  def this(topicCounts: SDV, topicTermCounts: Array[SSV], alpha: Double, beta: Double) {
-    this(new BDV[Double](topicCounts.toArray), topicTermCounts.map(t =>
-      new BSV(t.indices, t.values, t.size)), alpha, beta, alpha)
-  }
-
   @transient private lazy val numTopics = gtc.size
   @transient private lazy val numTerms = ttc.size
   @transient private lazy val numTokens = brzSum(gtc)
   @transient private lazy val betaSum = numTerms * beta
   @transient private lazy val alphaSum = numTopics * alpha
   @transient private lazy val termSum = numTokens + alphaAS * numTopics
-
   @transient private lazy val wordTableCache =
-    new AppendOnlyMap[Int, SoftReference[(Double, Table)]]()
+    new AppendOnlyMap[Int, SoftReference[(Double, AliasTable)]]()
   @transient private lazy val (t, tSum) = {
     val dv = tDense(gtc, numTokens, numTerms, alpha, alphaAS, beta)
-    (generateAlias(dv._2, dv._1), dv._1)
+    (AliasTable.generateAlias(dv._2, dv._1), dv._1)
   }
   @transient private lazy val rand = new XORShiftRandom()
+
+  def this(topicCounts: SDV, topicTermCounts: Array[SSV], alpha: Double, beta: Double) {
+    this(new BDV[Double](topicCounts.toArray), topicTermCounts.map(t =>
+      new BSV(t.indices, t.values, t.size)), alpha, beta, alpha)
+  }
 
   def setSeed(seed: Long): Unit = {
     rand.setSeed(seed)
@@ -140,9 +138,9 @@ class LDAModel private[mllib](
 
   private def tokenSampling(
     gen: Random,
-    t: Table,
+    t: AliasTable,
     tSum: Double,
-    w: Table,
+    w: AliasTable,
     wSum: Double,
     d: BSV[Double]): Int = {
     val index = d.index
@@ -156,50 +154,10 @@ class LDAModel private[mllib](
       val pos = binarySearchInterval(data, dGenSum, 0, used, true)
       index(pos)
     } else if (genSum < (dSum + wSum)) {
-      sampleAlias(gen, w)
+      w.sampleAlias(gen)
     } else {
-      sampleAlias(gen, t)
+      t.sampleAlias(gen)
     }
-  }
-
-
-  private def tDense(
-    totalTopicCounter: BDV[Double],
-    numTokens: Double,
-    numTerms: Double,
-    alpha: Double,
-    alphaAS: Double,
-    beta: Double): (Double, BDV[Double]) = {
-    val t = BDV.zeros[Double](numTopics)
-    var sum = 0.0
-    for (topic <- 0 until numTopics) {
-      val last = beta * alphaSum * (totalTopicCounter(topic) + alphaAS) /
-        ((totalTopicCounter(topic) + betaSum) * termSum)
-      t(topic) = last
-      sum += last
-    }
-    (sum, t)
-  }
-
-  private def wSparse(
-    totalTopicCounter: BDV[Double],
-    termTopicCounter: BSV[Double],
-    numTokens: Double,
-    numTerms: Double,
-    alpha: Double,
-    alphaAS: Double,
-    beta: Double): (Double, BSV[Double]) = {
-    val w = BSV.zeros[Double](numTopics)
-    var sum = 0.0
-    termTopicCounter.activeIterator.foreach { t =>
-      val topic = t._1
-      val count = t._2
-      val last = count * alphaSum * (totalTopicCounter(topic) + alphaAS) /
-        ((totalTopicCounter(topic) + betaSum) * termSum)
-      w(topic) = last
-      sum += last
-    }
-    (sum, w)
   }
 
   private def dSparse(
@@ -231,7 +189,7 @@ class LDAModel private[mllib](
   }
 
   private def wordTable(
-    cacheMap: AppendOnlyMap[Int, SoftReference[(Double, Table)]],
+    cacheMap: AppendOnlyMap[Int, SoftReference[(Double, AliasTable)]],
     totalTopicCounter: BDV[Double],
     termTopicCounter: BSV[Double],
     termId: Int,
@@ -239,29 +197,68 @@ class LDAModel private[mllib](
     numTerms: Double,
     alpha: Double,
     alphaAS: Double,
-    beta: Double): (Double, Table) = {
+    beta: Double): (Double, AliasTable) = {
     if (termTopicCounter.used == 0) return (0.0, null)
     var w = cacheMap(termId)
     if (w == null || w.get() == null) {
       val t = wSparse(totalTopicCounter, termTopicCounter,
         numTokens, numTerms, alpha, alphaAS, beta)
-      w = new SoftReference((t._1, generateAlias(t._2, t._1)))
+      w = new SoftReference((t._1, AliasTable.generateAlias(t._2, t._1)))
       cacheMap.update(termId, w)
 
     }
     w.get()
   }
 
-  private[mllib] def mergeOne(term: Int, topic: Int, inc: Int) = {
-    gtc(topic) += inc
-    ttc(term)(topic) += inc
-    this
+  private def wSparse(
+    totalTopicCounter: BDV[Double],
+    termTopicCounter: BSV[Double],
+    numTokens: Double,
+    numTerms: Double,
+    alpha: Double,
+    alphaAS: Double,
+    beta: Double): (Double, BSV[Double]) = {
+    val w = BSV.zeros[Double](numTopics)
+    var sum = 0.0
+    termTopicCounter.activeIterator.foreach { t =>
+      val topic = t._1
+      val count = t._2
+      val last = count * alphaSum * (totalTopicCounter(topic) + alphaAS) /
+        ((totalTopicCounter(topic) + betaSum) * termSum)
+      w(topic) = last
+      sum += last
+    }
+    (sum, w)
+  }
+
+  private def tDense(
+    totalTopicCounter: BDV[Double],
+    numTokens: Double,
+    numTerms: Double,
+    alpha: Double,
+    alphaAS: Double,
+    beta: Double): (Double, BDV[Double]) = {
+    val t = BDV.zeros[Double](numTopics)
+    var sum = 0.0
+    for (topic <- 0 until numTopics) {
+      val last = beta * alphaSum * (totalTopicCounter(topic) + alphaAS) /
+        ((totalTopicCounter(topic) + betaSum) * termSum)
+      t(topic) = last
+      sum += last
+    }
+    (sum, t)
   }
 
   private[mllib] def merge(term: Int, counter: BV[Int]) = {
     counter.activeIterator.foreach { case (topic, cn) =>
       mergeOne(term, topic, cn)
     }
+    this
+  }
+
+  private[mllib] def mergeOne(term: Int, topic: Int, inc: Int) = {
+    gtc(topic) += inc
+    ttc(term)(topic) += inc
     this
   }
 
@@ -283,88 +280,6 @@ object LDAModel {
 }
 
 private[mllib] object LDAUtils {
-
-  type Table = (Array[Int], Array[Int], Array[Double])
-
-  @transient private lazy val tableOrdering = new scala.math.Ordering[(Int, Double)] {
-    override def compare(x: (Int, Double), y: (Int, Double)): Int = {
-      Ordering.Double.compare(x._2, y._2)
-    }
-  }
-
-  @transient private lazy val tableReverseOrdering = tableOrdering.reverse
-
-  def generateAlias(sv: BV[Double], sum: Double): Table = {
-    val used = sv.activeSize
-    val probs = sv.activeIterator.slice(0, used)
-    generateAlias(probs, used, sum)
-  }
-
-  def generateAlias(
-    probs: Iterator[(Int, Double)],
-    used: Int,
-    sum: Double): Table = {
-    val pMean = 1.0 / used
-    val table = (new Array[Int](used), new Array[Int](used), new Array[Double](used))
-
-    val lq = new JPriorityQueue[(Int, Double)](used, tableOrdering)
-    val hq = new JPriorityQueue[(Int, Double)](used, tableReverseOrdering)
-
-    probs.slice(0, used).foreach { pair =>
-      val i = pair._1
-      val pi = pair._2 / sum
-      if (pi < pMean) {
-        lq.add((i, pi))
-      } else {
-        hq.add((i, pi))
-      }
-    }
-
-    var offset = 0
-    while (!lq.isEmpty & !hq.isEmpty) {
-      val (i, pi) = lq.remove()
-      val (h, ph) = hq.remove()
-      table._1(offset) = i
-      table._2(offset) = h
-      table._3(offset) = pi
-      val pd = ph - (pMean - pi)
-      if (pd >= pMean) {
-        hq.add((h, pd))
-      } else {
-        lq.add((h, pd))
-      }
-      offset += 1
-    }
-    while (!hq.isEmpty) {
-      val (h, ph) = hq.remove()
-      assert(ph - pMean < 1e-8)
-      table._1(offset) = h
-      table._2(offset) = h
-      table._3(offset) = ph
-      offset += 1
-    }
-
-    while (!lq.isEmpty) {
-      val (i, pi) = lq.remove()
-      assert(pMean - pi < 1e-8)
-      table._1(offset) = i
-      table._2(offset) = i
-      table._3(offset) = pi
-      offset += 1
-    }
-    table
-  }
-
-  def sampleAlias(gen: Random, table: Table): Int = {
-    val l = table._1.length
-    val bin = gen.nextInt(l)
-    val p = table._3(bin)
-    if (l * p > gen.nextDouble()) {
-      table._1(bin)
-    } else {
-      table._2(bin)
-    }
-  }
 
   def uniformSampler(rand: Random, dimension: Int): Int = {
     rand.nextInt(dimension)

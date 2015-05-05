@@ -17,7 +17,6 @@
 
 package org.apache.spark.mllib.clustering
 
-import java.lang.ref.SoftReference
 import java.util.Random
 
 import breeze.linalg.{DenseVector => BDV, SparseVector => BSV, sum => brzSum}
@@ -32,11 +31,12 @@ import org.apache.spark.rdd.RDD
 import org.apache.spark.serializer.KryoRegistrator
 import org.apache.spark.storage.StorageLevel
 import org.apache.spark.SparkContext._
-import org.apache.spark.util.collection.AppendOnlyMap
 import org.apache.spark.util.random.XORShiftRandom
 
 import LDA._
 import LDAUtils._
+
+import scala.collection.mutable.ArrayBuffer
 
 class LDA private[mllib](
   @transient private var corpus: Graph[VD, ED],
@@ -351,10 +351,16 @@ object LDA {
     val nweGraph = graph.mapTriplets(
       (pid, iter) => {
         val gen = new XORShiftRandom(parts * innerIter + pid)
-        val wordTableCache = new AppendOnlyMap[VertexId, SoftReference[(Double, Table)]]()
+        // table is a per term data structure
+        // in GraphX, edges in a partition are clustered by source IDs (term id in this case)
+        // so, use below simple cache to avoid calculating table each time
+        val lastTable = AliasTable(new Array[Int](numTopics.toInt), new Array[Int](numTopics.toInt),
+          new Array[Double](numTopics.toInt), numTopics.toInt)
+        var lastVid: VertexId = -1
+        var lastWSum = 0.0
         val dv = tDense(totalTopicCounter, numTokens, numTerms, alpha, alphaAS, beta)
         val dData = new Array[Double](numTopics.toInt)
-        val t = generateAlias(dv._2, dv._1)
+        val t = AliasTable.generateAlias(dv._2, dv._1)
         val tSum = dv._1
         iter.map {
           triplet =>
@@ -369,10 +375,12 @@ object LDA {
                 termTopicCounter.synchronized {
                   dSparse(totalTopicCounter, termTopicCounter, docTopicCounter, dData,
                     currentTopic, numTokens, numTerms, alpha, alphaAS, beta)
-                  val (wSum, w) = wordTable(x => x == null || x.get() == null || gen.nextDouble() < 1e-4,
-                    wordTableCache, totalTopicCounter, termTopicCounter,
-                    termId, numTokens, numTerms, alpha, alphaAS, beta)
-                  val newTopic = tokenSampling(gen, t, tSum, w, termTopicCounter, wSum,
+                  if (lastVid != termId || gen.nextDouble() < 1e-4) {
+                    lastWSum = wordTable(lastTable, totalTopicCounter, termTopicCounter,
+                      termId, numTokens, numTerms, alpha, alphaAS, beta)
+                    lastVid = termId
+                  }
+                  val newTopic = tokenSampling(gen, t, tSum, lastTable, termTopicCounter, lastWSum,
                     docTopicCounter, dData, currentTopic)
 
                   if (newTopic != currentTopic) {
@@ -527,9 +535,9 @@ object LDA {
   // scalastyle:on
   private def tokenSampling(
     gen: Random,
-    t: Table,
+    t: AliasTable,
     tSum: Double,
-    w: Table,
+    w: AliasTable,
     termTopicCounter: VD,
     wSum: Double,
     docTopicCounter: VD,
@@ -547,7 +555,7 @@ object LDA {
     } else if (genSum < (dSum + wSum)) {
       sampleSV(gen, w, termTopicCounter, currentTopic)
     } else {
-      sampleAlias(gen, t)
+      t.sampleAlias(gen)
     }
   }
 
@@ -645,8 +653,7 @@ object LDA {
   }
 
   private def wordTable(
-    updateFunc: SoftReference[(Double, Table)] => Boolean,
-    cacheMap: AppendOnlyMap[VertexId, SoftReference[(Double, Table)]],
+    table: AliasTable,
     totalTopicCounter: BDV[Count],
     termTopicCounter: VD,
     termId: VertexId,
@@ -654,28 +661,22 @@ object LDA {
     numTerms: Double,
     alpha: Double,
     alphaAS: Double,
-    beta: Double): (Double, Table) = {
-    val cacheW = cacheMap(termId)
-    if (!updateFunc(cacheW)) {
-      cacheW.get
-    } else {
-      val sv = wSparse(totalTopicCounter, termTopicCounter,
-        numTokens, numTerms, alpha, alphaAS, beta)
-      val w = (sv._1, generateAlias(sv._2, sv._1))
-      cacheMap.update(termId, new SoftReference(w))
-      w
-    }
+    beta: Double): Double = {
+    val sv = wSparse(totalTopicCounter, termTopicCounter,
+      numTokens, numTerms, alpha, alphaAS, beta)
+    AliasTable.generateAlias(sv._2, sv._1, table)
+    sv._1
   }
 
-  private def sampleSV(gen: Random, table: Table, sv: VD, currentTopic: Int): Int = {
-    val docTopic = sampleAlias(gen, table)
+  private def sampleSV(gen: Random, table: AliasTable, sv: VD, currentTopic: Int): Int = {
+    val docTopic = table.sampleAlias(gen)
     if (docTopic == currentTopic) {
       val svCounter = sv(currentTopic)
       // 这里的处理方法不太对.
       // 如果采样到当前token的Topic这丢弃掉
       // svCounter == 1 && table.length > 1 采样到token的Topic 但包含其他token
       // svCounter > 1 && gen.nextDouble() < 1.0 / svCounter 采样的Topic 有1/svCounter 概率属于当前token
-      if ((svCounter == 1 && table._1.length > 1) ||
+      if ((svCounter == 1 && table.used > 1) ||
         (svCounter > 1 && gen.nextDouble() < 1.0 / svCounter)) {
         return sampleSV(gen, table, sv, currentTopic)
       }
