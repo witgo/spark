@@ -175,7 +175,7 @@ class SoftmaxFunction extends ActivationFunction {
       var i = 0
       var sum = 0.0
       while (i < x.rows) {
-        val res = Bsigmoid(x(i,j))
+        val res = Math.exp(x(i,j))
         y(i, j) = res
         sum += res
         i += 1
