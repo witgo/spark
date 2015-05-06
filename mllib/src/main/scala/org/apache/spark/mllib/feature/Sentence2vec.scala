@@ -124,9 +124,10 @@ class Sentence2vec(
     param: ParamInterval): Unit = {
     val k = 5
     val sentenceSize = sentence.size
-    var randomize = new Array[Int](sentenceSize)
-    Array.copy(sentence, 0, randomize, 0, sentenceSize)
-    randomize = Utils.randomizeInPlace(randomize, rand).slice(0, 3)
+    val randomize = sentence
+    // var randomize = new Array[Int](sentenceSize)
+    // Array.copy(sentence, 0, randomize, 0, sentenceSize)
+    // randomize = Utils.randomizeInPlace(randomize, rand).slice(0, 3)
     var sampleSize = 0.0
     var loss = 0.0
     for (word <- randomize) {
