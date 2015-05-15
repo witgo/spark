@@ -17,7 +17,7 @@
 
 package org.apache.spark.mllib.classification
 
-import org.apache.spark.mllib.ann.{FeedForwardTrainer, FeedForwardModel}
+import org.apache.spark.mllib.ann.{TopologyModel, Topology, FeedForwardTrainer, FeedForwardModel}
 import org.apache.spark.mllib.linalg.Vector
 import org.apache.spark.mllib.regression.LabeledPoint
 import org.apache.spark.rdd.RDD
@@ -37,7 +37,7 @@ object LabelConverter {
   }
 }
 
-class ANNClassifierModel (val annModel: FeedForwardModel)
+class ANNClassifierModel (val annModel: TopologyModel)
   extends ClassificationModel with Serializable {
   /**
    * Predict values for the given data set using the model trained.

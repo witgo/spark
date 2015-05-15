@@ -453,7 +453,7 @@ object FeedForwardModel {
 
 /* Neural network gradient. Does nothing but calling Model's gradient
 * */
-class ANNGradient(topology: FeedForwardTopology, dataStacker: DataStacker) extends Gradient {
+class ANNGradient(topology: Topology, dataStacker: DataStacker) extends Gradient {
 
   override def compute(data: Vector, label: Double, weights: Vector): (Vector, Double) = {
     val gradient = Vectors.zeros(weights.size)
@@ -464,7 +464,6 @@ class ANNGradient(topology: FeedForwardTopology, dataStacker: DataStacker) exten
   override def compute(data: Vector, label: Double, weights: Vector,
                        cumGradient: Vector): Double = {
     val (input, target, realBatchSize) = dataStacker.unstack(data)
-    //val model = FeedForwardModel(topology, weights)
     val model = topology.getInstance(weights)
     model.computeGradient(input, target, cumGradient, realBatchSize)
   }
@@ -528,11 +527,11 @@ private class ANNUpdater extends Updater {
 }
 /* MLlib-style trainer class that trains a network given the data and topology
 * */
-class FeedForwardTrainer (topology: FeedForwardTopology, val inputSize: Int,
+class FeedForwardTrainer (topology: Topology, val inputSize: Int,
                           val outputSize: Int) extends Serializable {
 
   // TODO: what if we need to pass random seed?
-  private var _weights = FeedForwardModel(topology).weights()
+  private var _weights = topology.getInstance(11L).weights()//FeedForwardModel(topology).weights()
   private var _batchSize = 1
   private var dataStacker = new DataStacker(_batchSize, inputSize, outputSize)
   private var _gradient: Gradient = new ANNGradient(topology, dataStacker)
@@ -595,9 +594,10 @@ class FeedForwardTrainer (topology: FeedForwardTopology, val inputSize: Int,
     }
   }
 
-  def train(data: RDD[(Vector, Vector)]): FeedForwardModel = {
+  def train(data: RDD[(Vector, Vector)]): TopologyModel = {
     val newWeights = optimizer.optimize(dataStacker.stack(data), getWeights)
-    FeedForwardModel(topology, newWeights)
+    //FeedForwardModel(topology, newWeights)
+    topology.getInstance(newWeights)
   }
 
 }
