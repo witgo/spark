@@ -7,6 +7,9 @@ import org.scalatest.FunSuite
 
 class ANNSuite extends FunSuite with MLlibTestSparkContext {
 
+  // TODO: add test for uneven batching
+  // TODO: add test for gradient
+
   test("ANN with Sigmoid learns XOR function with LBFGS optimizer") {
     val inputs = Array[Array[Double]](
       Array[Double](0, 0),
@@ -22,7 +25,7 @@ class ANNSuite extends FunSuite with MLlibTestSparkContext {
     val hiddenLayersTopology = Array[Int](5)
     val dataSample = rddData.first()
     val layerSizes = dataSample._1.size +: hiddenLayersTopology :+ dataSample._2.size
-    val topology = Topology.multiLayerPerceptron(layerSizes, false)
+    val topology = FeedForwardTopology.multiLayerPerceptron(layerSizes, false)
     val initialWeights = FeedForwardModel(topology, 23124).weights()
     val trainer = new FeedForwardTrainer(topology, 2, 1)
     trainer.setWeights(initialWeights)
@@ -55,7 +58,7 @@ class ANNSuite extends FunSuite with MLlibTestSparkContext {
     val hiddenLayersTopology = Array[Int](5)
     val dataSample = rddData.first()
     val layerSizes = dataSample._1.size +: hiddenLayersTopology :+ dataSample._2.size
-    val topology = Topology.multiLayerPerceptron(layerSizes, false)
+    val topology = FeedForwardTopology.multiLayerPerceptron(layerSizes, false)
     val initialWeights = FeedForwardModel(topology, 23124).weights()
     val trainer = new FeedForwardTrainer(topology, 2, 2)
     trainer.SGDOptimizer.setNumIterations(2000)

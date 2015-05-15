@@ -17,7 +17,7 @@
 
 package org.apache.spark.mllib.classification
 
-import org.apache.spark.mllib.ann.{FeedForwardTrainer, FeedForwardModel, Topology}
+import org.apache.spark.mllib.ann.{FeedForwardTrainer, FeedForwardModel, FeedForwardTopology}
 import org.apache.spark.mllib.linalg.Vectors
 import org.apache.spark.mllib.regression.LabeledPoint
 import org.apache.spark.mllib.util.MLlibTestSparkContext
@@ -37,7 +37,7 @@ class ANNClassifierSuite extends FunSuite with MLlibTestSparkContext {
       new LabeledPoint(output, Vectors.dense(input))}
     val rddData = sc.parallelize(data, 2)
     val layers = Array[Int](2, 5, 2)
-    val topology = Topology.multiLayerPerceptron(layers)
+    val topology = FeedForwardTopology.multiLayerPerceptron(layers)
     val initialWeights = FeedForwardModel(topology, 0x01234567).weights()
     val trainer = new FeedForwardTrainer(topology, 2, 2)
     trainer.setWeights(initialWeights).setBatchSize(1)

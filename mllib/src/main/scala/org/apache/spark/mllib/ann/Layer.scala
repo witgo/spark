@@ -40,21 +40,19 @@ trait LayerModel extends Serializable {
   val size: Int
   def eval(data: BDM[Double]): BDM[Double]
   def prevDelta(nextDelta: BDM[Double], input: BDM[Double]): BDM[Double]
-  def grad(delta: BDM[Double], input: BDM[Double]): Vector
+  def grad(delta: BDM[Double], input: BDM[Double]): Array[Double]
   def weights(): Vector
 }
 
 /* Layer for affine transformations that is y=Ax+b
 * */
-class AffineLayer(numIn: Int, numOut: Int) extends Layer {
+class AffineLayer(val numIn: Int, val numOut: Int) extends Layer {
   override def getInstance(weights: Vector, position: Int): LayerModel = {
-    val (w, b) = AffineLayerModel.unroll(weights, position, numIn, numOut)
-    AffineLayerModel(w, b)
+    AffineLayerModel(this, weights, position)
   }
 
   override def getInstance(seed: Long = 11L): LayerModel = {
-    val (w, b) = AffineLayerModel.randomWeights(numIn, numOut, seed)
-    AffineLayerModel(w, b)
+    AffineLayerModel(this, seed)
   }
 }
 
@@ -62,12 +60,11 @@ class AffineLayer(numIn: Int, numOut: Int) extends Layer {
 * */
 class AffineLayerModel private(w: BDM[Double], b: BDV[Double]) extends LayerModel {
   val size = w.size + b.length
-
-  // TODO: if the last batch != given batch ?
+  val gwb = new Array[Double](size)
+  private lazy val gw: BDM[Double] = new BDM[Double](w.rows, w.cols, gwb)
+  private lazy val gb: BDV[Double] = new BDV[Double](gwb, w.size)
   private var z: BDM[Double] = null
   private var d: BDM[Double] = null
-  private var gw: BDM[Double] = null
-  private var gb: BDV[Double] = null
   private var ones: BDV[Double] = null
 
   override def eval(data: BDM[Double]): BDM[Double] = {
@@ -83,13 +80,11 @@ class AffineLayerModel private(w: BDM[Double], b: BDV[Double]) extends LayerMode
     d
   }
 
-  override def grad(delta: BDM[Double], input: BDM[Double]): Vector = {
-    if (gw == null || gw.cols != input.rows) gw = new BDM[Double](delta.rows, input.rows)
+  override def grad(delta: BDM[Double], input: BDM[Double]): Array[Double] = {
     BreezeUtil.dgemm(1.0 / input.cols, delta, input.t, 0.0, gw)
-    if (gb == null || gb.length != delta.rows) gb = BDV.zeros[Double](delta.rows)
     if (ones == null || ones.length != delta.cols) ones = BDV.ones[Double](delta.cols)
     BreezeUtil.gemv(1.0 / input.cols, delta, ones, 0.0, gb)
-    AffineLayerModel.roll(gw, gb)
+    gwb
   }
 
   override def weights(): Vector = AffineLayerModel.roll(w, b)
@@ -97,7 +92,13 @@ class AffineLayerModel private(w: BDM[Double], b: BDV[Double]) extends LayerMode
 
 object AffineLayerModel {
 
-  def apply(w: BDM[Double], b: BDV[Double]): AffineLayerModel = {
+  def apply(layer: AffineLayer, weights: Vector, position: Int): AffineLayerModel = {
+    val (w, b) = unroll(weights, position, layer.numIn, layer.numOut)
+    new AffineLayerModel(w, b)
+  }
+
+  def apply(layer: AffineLayer, seed: Long): AffineLayerModel = {
+    val (w, b) = randomWeights(layer.numIn, layer.numOut, seed)
     new AffineLayerModel(w, b)
   }
 
@@ -247,11 +248,11 @@ class SigmoidFunction extends ActivationFunction {
 
 /* Functional layer, that is y = f(x)
 * */
-class FunctionalLayer (activationFunction: ActivationFunction) extends Layer {
+class FunctionalLayer (val activationFunction: ActivationFunction) extends Layer {
   override def getInstance(weights: Vector, position: Int): LayerModel = getInstance(0L)
 
   override def getInstance(seed: Long): LayerModel =
-    FunctionalLayerModel(activationFunction)
+    FunctionalLayerModel(this)
 }
 
 /* Functional layer model. Holds no parameters (weights).
@@ -263,6 +264,7 @@ class FunctionalLayerModel private (val activationFunction: ActivationFunction
   private var f: BDM[Double] = null
   private var d: BDM[Double] = null
   private var e: BDM[Double] = null
+  private lazy val dg = new Array[Double](0)
 
   override def eval(data: BDM[Double]): BDM[Double] =  {
     if (f == null || f.cols != data.cols) f = new BDM[Double](data.rows, data.cols)
@@ -277,8 +279,7 @@ class FunctionalLayerModel private (val activationFunction: ActivationFunction
     d
   }
 
-  override def grad(delta: BDM[Double], input: BDM[Double]): Vector =
-    Vectors.dense(new Array[Double](0))
+  override def grad(delta: BDM[Double], input: BDM[Double]): Array[Double] = dg
 
   override def weights(): Vector = Vectors.dense(new Array[Double](0))
 
@@ -304,25 +305,39 @@ class FunctionalLayerModel private (val activationFunction: ActivationFunction
 }
 
 object FunctionalLayerModel {
-  def apply(activationFunction: ActivationFunction): FunctionalLayerModel = {
-    new FunctionalLayerModel(activationFunction)
-  }
+  def apply(layer: FunctionalLayer) = new FunctionalLayerModel(layer.activationFunction)
 }
+
+trait Topology extends Serializable{
+  def getInstance(weights: Vector): TopologyModel
+  def getInstance(seed: Long): TopologyModel
+}
+
+trait TopologyModel extends Serializable{
+  def forward(data: BDM[Double]): Array[BDM[Double]]
+  def predict(data: Vector): Vector
+  def computeGradient(data: BDM[Double], target: BDM[Double], cumGradient: Vector,
+                      realBatchSize: Int): Double
+  def weights(): Vector
+}
+
 
 /* Network topology that holds the array of layers.
 * */
-class Topology(val layers: Array[Layer], val dropoutProb: Array[Double]) extends Serializable {
+class FeedForwardTopology(val layers: Array[Layer]) extends Topology {
+  override def getInstance(weights: Vector): TopologyModel = FeedForwardModel(this, weights)
 
+  override def getInstance(seed: Long): TopologyModel = FeedForwardModel(this, seed)
 }
 
 /* Factory for some of the frequently-used topologies
 * */
-object Topology {
-  def apply(layers: Array[Layer]): Topology = {
-    new Topology(layers, Array.fill[Double](layers.length)(0D))
+object FeedForwardTopology {
+  def apply(layers: Array[Layer]): FeedForwardTopology = {
+    new FeedForwardTopology(layers)
   }
 
-  def multiLayerPerceptron(layerSizes: Array[Int], softmax: Boolean = true): Topology = {
+  def multiLayerPerceptron(layerSizes: Array[Int], softmax: Boolean = true): FeedForwardTopology = {
     val layers = new Array[Layer]((layerSizes.length - 1) * 2)
     for(i <- 0 until layerSizes.length - 1){
       layers(i * 2) = new AffineLayer(layerSizes(i), layerSizes(i + 1))
@@ -333,7 +348,7 @@ object Topology {
           new FunctionalLayer(new SigmoidFunction())
         }
     }
-    Topology(layers)
+    FeedForwardTopology(layers)
   }
 }
 
@@ -341,8 +356,8 @@ object Topology {
 * Implements forward, gradient computation and can return weights in vector format.
 * */
 class FeedForwardModel(val layerModels: Array[LayerModel],
-                       val topology: Topology) extends Serializable {
-  def forward(data: BDM[Double]): Array[BDM[Double]] = {
+                       val topology: FeedForwardTopology) extends TopologyModel {
+  override def forward(data: BDM[Double]): Array[BDM[Double]] = {
     val outputs = new Array[BDM[Double]](layerModels.length)
     outputs(0) = layerModels(0).eval(data)
     for(i <- 1 until layerModels.length){
@@ -351,7 +366,7 @@ class FeedForwardModel(val layerModels: Array[LayerModel],
     outputs
   }
 
-  def computeGradient(data: BDM[Double], target: BDM[Double], cumGradient: Vector,
+  override def computeGradient(data: BDM[Double], target: BDM[Double], cumGradient: Vector,
                       realBatchSize: Int): Double = {
     val outputs = forward(data)
     val deltas = new Array[BDM[Double]](layerModels.length)
@@ -366,7 +381,7 @@ class FeedForwardModel(val layerModels: Array[LayerModel],
     for (i <- (L - 2) to (0, -1)) {
       deltas(i) = layerModels(i + 1).prevDelta(deltas(i + 1), outputs(i + 1))
     }
-    val grads = new Array[Vector](layerModels.length)
+    val grads = new Array[Array[Double]](layerModels.length)
     for (i <- 0 until layerModels.length) {
       val input = if (i==0) data else outputs(i - 1)
       grads(i) = layerModels(i).grad(deltas(i), input)
@@ -376,7 +391,7 @@ class FeedForwardModel(val layerModels: Array[LayerModel],
     var offset = 0
     // TODO: extract roll
     for (i <- 0 until grads.length) {
-      val gradArray = grads(i).toArray
+      val gradArray = grads(i)
       var k = 0
       while (k < gradArray.length) {
         cumGradientArray(offset + k) += gradArray(k)
@@ -384,11 +399,11 @@ class FeedForwardModel(val layerModels: Array[LayerModel],
       }
       offset += gradArray.length
     }
-
     newError
   }
 
-  def weights(): Vector = {
+  // TODO: do we really need to copy the weights? they should be read-only
+  override def weights(): Vector = {
     // TODO: extract roll
     var size = 0
     for(i <- 0 until layerModels.length) {
@@ -404,7 +419,7 @@ class FeedForwardModel(val layerModels: Array[LayerModel],
     Vectors.dense(array)
   }
 
-  def predict(data: Vector): Vector = {
+  override def predict(data: Vector): Vector = {
     val result = forward(data.toBreeze.toDenseVector.toDenseMatrix.t)
     Vectors.dense(result.last.toArray)
   }
@@ -412,7 +427,8 @@ class FeedForwardModel(val layerModels: Array[LayerModel],
 }
 
 object FeedForwardModel {
-  def apply(topology: Topology, weights: Vector): FeedForwardModel = {
+
+  def apply(topology: FeedForwardTopology, weights: Vector): FeedForwardModel = {
     val layers = topology.layers
     val layerModels = new Array[LayerModel](layers.length)
     var offset = 0
@@ -423,7 +439,7 @@ object FeedForwardModel {
     new FeedForwardModel(layerModels, topology)
   }
 
-  def apply(topology: Topology, seed: Long = 11L): FeedForwardModel = {
+  def apply(topology: FeedForwardTopology, seed: Long = 11L): FeedForwardModel = {
     val layers = topology.layers
     val layerModels = new Array[LayerModel](layers.length)
     var offset = 0
@@ -437,7 +453,7 @@ object FeedForwardModel {
 
 /* Neural network gradient. Does nothing but calling Model's gradient
 * */
-class ANNGradient(topology: Topology, dataStacker: DataStacker) extends Gradient {
+class ANNGradient(topology: FeedForwardTopology, dataStacker: DataStacker) extends Gradient {
 
   override def compute(data: Vector, label: Double, weights: Vector): (Vector, Double) = {
     val gradient = Vectors.zeros(weights.size)
@@ -448,7 +464,8 @@ class ANNGradient(topology: Topology, dataStacker: DataStacker) extends Gradient
   override def compute(data: Vector, label: Double, weights: Vector,
                        cumGradient: Vector): Double = {
     val (input, target, realBatchSize) = dataStacker.unstack(data)
-    val model = FeedForwardModel(topology, weights)
+    //val model = FeedForwardModel(topology, weights)
+    val model = topology.getInstance(weights)
     model.computeGradient(input, target, cumGradient, realBatchSize)
   }
 }
@@ -511,7 +528,7 @@ private class ANNUpdater extends Updater {
 }
 /* MLlib-style trainer class that trains a network given the data and topology
 * */
-class FeedForwardTrainer (topology: Topology, val inputSize: Int,
+class FeedForwardTrainer (topology: FeedForwardTopology, val inputSize: Int,
                           val outputSize: Int) extends Serializable {
 
   // TODO: what if we need to pass random seed?
