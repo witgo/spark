@@ -305,7 +305,8 @@ class FunctionalLayerModel private (val activationFunction: ActivationFunction
 }
 
 object FunctionalLayerModel {
-  def apply(layer: FunctionalLayer) = new FunctionalLayerModel(layer.activationFunction)
+  def apply(layer: FunctionalLayer): FunctionalLayerModel =
+    new FunctionalLayerModel(layer.activationFunction)
 }
 
 trait Topology extends Serializable{
@@ -423,7 +424,6 @@ class FeedForwardModel(val layerModels: Array[LayerModel],
     val result = forward(data.toBreeze.toDenseVector.toDenseMatrix.t)
     Vectors.dense(result.last.toArray)
   }
-
 }
 
 object FeedForwardModel {
@@ -531,13 +531,12 @@ class FeedForwardTrainer (topology: Topology, val inputSize: Int,
                           val outputSize: Int) extends Serializable {
 
   // TODO: what if we need to pass random seed?
-  private var _weights = topology.getInstance(11L).weights()//FeedForwardModel(topology).weights()
+  private var _weights = topology.getInstance(11L).weights()
   private var _batchSize = 1
   private var dataStacker = new DataStacker(_batchSize, inputSize, outputSize)
   private var _gradient: Gradient = new ANNGradient(topology, dataStacker)
   private var _updater: Updater = new ANNUpdater()
   private var optimizer: Optimizer = LBFGSOptimizer.setConvergenceTol(1e-4).setNumIterations(100)
-
 
   def getWeights: Vector = _weights
 
@@ -596,7 +595,6 @@ class FeedForwardTrainer (topology: Topology, val inputSize: Int,
 
   def train(data: RDD[(Vector, Vector)]): TopologyModel = {
     val newWeights = optimizer.optimize(dataStacker.stack(data), getWeights)
-    //FeedForwardModel(topology, newWeights)
     topology.getInstance(newWeights)
   }
 
