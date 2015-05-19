@@ -73,7 +73,7 @@ class MinstDatasetReader(labelsFile: String, imagesFile: String)
     }
   }
 
-  override def hasNext = current < imageCount
+  override def hasNext: Boolean = current < imageCount
 
   override def close: Unit = {
     imagesBuf.close()

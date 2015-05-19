@@ -25,7 +25,7 @@ class MLPSuite extends FunSuite with MnistDatasetSuite with Matchers {
   test("MLP") {
     val (data, numVisible) = mnistTrainDataset(5000)
     val topology = Array(numVisible, 500, 10)
-    val nn = MLP.train(data, 20, 1000, topology, 0.01, 0.05, 0.0)
+    val nn = MLP.train(data, 20, 1000, topology, 0.01, 2e-3, 0.0)
 
     // val nn = MLP.runLBFGS(data, topology, 100, 4000, 1e-5, 0.001)
     // MLP.runSGD(data, nn, 37, 6000, 0.1, 0.5, 0.0)

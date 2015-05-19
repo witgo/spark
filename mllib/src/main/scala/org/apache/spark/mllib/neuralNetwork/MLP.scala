@@ -60,11 +60,11 @@ class MLP(
     topology
   }
 
-  def numLayer = innerLayers.length
+  def numLayer: Int = innerLayers.length
 
-  def numInput = innerLayers.head.numIn
+  def numInput: Int = innerLayers.head.numIn
 
-  def numOut = innerLayers.last.numOut
+  def numOut: Int = innerLayers.last.numOut
 
   def predict(x: BDM[Double]): BDM[Double] = {
     var output = x
@@ -236,7 +236,7 @@ object MLP extends Logging {
       mlp.innerLayers.map(_.layerType),
       mlp.dropout,
       batchSize)
-    val updater = new MLPAdaDeltaUpdater(mlp.topology, rho, epsilon)
+    val updater = new MLPEquilibratedUpdater(mlp.topology)
     val optimizer = new GradientDescent(gradient, updater).
       setMiniBatchFraction(fraction).
       setNumIterations(maxNumIterations).
@@ -535,10 +535,24 @@ private[mllib] class MLPUpdater(val topology: Array[Int]) extends Updater {
 @Experimental
 private[mllib] class MLPAdaGradUpdater(
   val topology: Array[Int],
-  rho: Double = 1 - 1e-2,
-  epsilon: Double = 1e-2,
-  gamma: Double = 1e-1,
-  momentum: Double = 0.9) extends AdaGradUpdater(rho, epsilon, gamma, momentum) {
+  rho: Double = 0,
+  epsilon: Double = 1e-6,
+  momentum: Double = 0.9) extends AdaGradUpdater(rho, epsilon, momentum) {
+  override protected def l2(
+    weightsOld: SV,
+    gradient: SV,
+    stepSize: Double,
+    iter: Int,
+    regParam: Double): Double = {
+    MLP.l2(topology, weightsOld, gradient, stepSize, iter, regParam)
+  }
+}
+
+@Experimental
+private[mllib] class MLPEquilibratedUpdater(
+  val topology: Array[Int],
+  _epsilon: Double = 1e-6,
+  _momentum: Double = 0.9) extends EquilibratedUpdater(_epsilon, _momentum) {
   override protected def l2(
     weightsOld: SV,
     gradient: SV,

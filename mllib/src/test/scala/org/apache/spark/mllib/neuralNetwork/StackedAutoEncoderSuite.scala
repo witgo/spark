@@ -44,7 +44,7 @@ with MnistDatasetSuite with Matchers {
       sv.asInstanceOf[SV]
     }
     val dbn = new StackedAutoEncoder(Array(numTerms, 10, numTerms))
-    //StackedAutoEncoder.pretrain(docs, 1, 1000, dbn, 0.001, 0.1, 0.0)
-    StackedAutoEncoder.finetune(docs, 1, 8000, dbn,  0.0005, 0.05, 0.0)
+    // StackedAutoEncoder.pretrain(docs, 1, 1000, dbn, 0.001, 0.1, 0.0)
+    StackedAutoEncoder.finetune(docs, 1, 8000, dbn, 0.0005, 0.05, 0.0)
   }
 }

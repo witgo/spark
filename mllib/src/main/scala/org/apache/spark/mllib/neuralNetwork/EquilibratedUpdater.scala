@@ -20,13 +20,18 @@ package org.apache.spark.mllib.neuralNetwork
 import org.apache.spark.annotation.Experimental
 import org.apache.spark.mllib.linalg.{Vector => SV, DenseVector => SDV, Vectors, BLAS}
 import org.apache.spark.mllib.optimization.Updater
+import org.apache.spark.util.Utils
 
+/**
+ * Equilibrated Gradient Descent the paper:
+ * RMSProp and equilibrated adaptive learning rates for non-convex optimization
+ * @param epsilon
+ * @param momentum
+ */
 @Experimental
-class AdaGradUpdater(
-  val rho: Double,
+class EquilibratedUpdater(
   val epsilon: Double,
   val momentum: Double) extends Updater {
-  require(rho >= 0 && rho < 1)
   require(momentum >= 0 && momentum < 1)
   @transient private var etaSum: SDV = null
   @transient private var momentumSum: SDV = null
@@ -46,32 +51,28 @@ class AdaGradUpdater(
     stepSize: Double,
     iter: Int,
     regParam: Double): (SV, Double) = {
-    if (momentum > 0 && momentumSum == null) {
-      momentumSum = new SDV(new Array[Double](weightsOld.size))
-    }
-    if (etaSum == null) {
-      etaSum = new SDV(new Array[Double](weightsOld.size))
-    }
-    if (momentum > 0) {
-      BLAS.axpy(momentum, momentumSum, gradient)
-      this.synchronized {
-        BLAS.copy(gradient, momentumSum)
-      }
-    }
-
+    if (etaSum == null) etaSum = new SDV(new Array[Double](weightsOld.size))
     val reg = l2(weightsOld, gradient, stepSize, iter, regParam)
 
     val grad = gradient.toBreeze
-    val g2 = grad :* grad
-    this.synchronized {
-      if (rho > 0D && rho < 1D) {
-        BLAS.scal(rho, etaSum)
-      }
-      BLAS.axpy(1D, Vectors.fromBreeze(g2), etaSum)
+    val e = etaSum.toBreeze
+    for (i <- 0 until grad.length) {
+      e(i) += math.pow(grad(i) * Utils.random.nextGaussian(), 2)
     }
 
-    for (i <- 0 until grad.length) {
-      grad(i) /= (epsilon + math.sqrt(etaSum(i)))
+    etaSum.synchronized {
+      for (i <- 0 until grad.length) {
+        grad(i) /= (epsilon + math.sqrt(etaSum(i) / iter))
+      }
+    }
+
+    if (momentum > 0) {
+      if (momentumSum == null) momentumSum = new SDV(new Array[Double](weightsOld.size))
+      momentumSum.synchronized {
+        BLAS.scal(momentum, momentumSum)
+        BLAS.axpy(1 - momentum, gradient, momentumSum)
+        BLAS.copy(momentumSum, gradient)
+      }
     }
 
     BLAS.axpy(-stepSize, gradient, weightsOld)
