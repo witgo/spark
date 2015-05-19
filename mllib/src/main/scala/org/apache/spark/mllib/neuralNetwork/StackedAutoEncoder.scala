@@ -36,11 +36,11 @@ class StackedAutoEncoder(val stackedRBM: StackedRBM)
 
   lazy val mlp: MLP = stackedRBM.toMLP
 
-  def numInput = stackedRBM.numInput
+  def numInput: Int = stackedRBM.numInput
 
-  def numOut = stackedRBM.numOut
+  def numOut: Int = stackedRBM.numOut
 
-  def numLayer = stackedRBM.numLayer
+  def numLayer: Int = stackedRBM.numLayer
 
   def forward(visible: BDM[Double]): BDM[Double] = {
     stackedRBM.forward(visible, stackedRBM.numLayer / 2 + 1)

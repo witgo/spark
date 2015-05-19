@@ -19,14 +19,13 @@ package org.apache.spark.mllib.neuralNetwork
 
 import java.util.Random
 
-import breeze.linalg.{DenseVector => BDV, DenseMatrix => BDM, Matrix => BM,
-sum => brzSum, Axis => BrzAxis, axpy => brzAxpy, norm => brzNorm}
+import breeze.linalg.{DenseVector => BDV, DenseMatrix => BDM,
+sum => brzSum, Axis => BrzAxis, axpy => brzAxpy}
 import org.apache.commons.math3.random.JDKRandomGenerator
 
 import org.apache.spark.annotation.Experimental
 import org.apache.spark.Logging
-import org.apache.spark.mllib.linalg.{DenseMatrix => SDM, SparseMatrix => SSM, Matrix => SM,
-SparseVector => SSV, DenseVector => SDV, Vector => SV, Vectors, Matrices, BLAS}
+import org.apache.spark.mllib.linalg.{DenseVector => SDV, Vector => SV, BLAS}
 import org.apache.spark.mllib.optimization.{Gradient, GradientDescent}
 import org.apache.spark.storage.StorageLevel
 import org.apache.spark.util.Utils
@@ -360,10 +359,8 @@ private[mllib] class RBMAdaGradUpdater(
   val numIn: Int,
   val numOut: Int,
   rho: Double = 0,
-  epsilon: Double = 1e-2,
-  gamma: Double = 1e-1,
-  momentum: Double = 0.9) extends AdaGradUpdater(rho, epsilon, gamma, momentum) {
-
+  epsilon: Double = 1e-6,
+  momentum: Double = 0.9) extends AdaGradUpdater(rho, epsilon, momentum) {
   override protected def l2(
     weightsOld: SV,
     gradient: SV,
