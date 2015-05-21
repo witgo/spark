@@ -17,9 +17,9 @@
 
 package org.apache.spark.mllib.ann
 
+import breeze.linalg.{DenseMatrix => BDM, DenseVector => BDV, SparseVector => BSV,
+argmax => brzArgMax, axpy => brzAxpy, max => brzMax, norm => brzNorm, sum => brzSum}
 import org.apache.spark.mllib.linalg.Vector
-import breeze.linalg.{DenseMatrix => BDM, DenseVector => BDV, SparseVector => BSV, argmax => brzArgMax,
-axpy => brzAxpy, max => brzMax, norm => brzNorm, sum => brzSum}
 import org.apache.spark.mllib.util.MnistDatasetSuite
 import org.apache.spark.rdd.RDD
 import org.scalatest.{FunSuite, Matchers}
@@ -28,14 +28,14 @@ class DBNSuite extends FunSuite with MnistDatasetSuite with Matchers {
   ignore("mnist SGD") {
     val (data, numVisible) = mnistTrainDataset(5000)
     val numOut = 10
-    val topology = RBMTopology(numVisible, numOut, 0.5)
+    val topology = RBMTopology(numVisible, numOut, 0)
     val initialWeights = topology.getInstance(117).weights()
     val trainer = new RBMTrainer(topology)
     trainer.SGDOptimizer.setNumIterations(2000).setMiniBatchFraction(1).setStepSize(0.01)
-    //val updater = new AdaGradUpdater(0, 1e-6, 0.9)
+    // val updater = new AdaGradUpdater(0, 1e-6, 0.9)
     val updater = new EquilibratedUpdater(1e-6, 0)
     trainer.setWeights(initialWeights).setUpdater(updater)
-    //trainer.setWeights(initialWeights)
+    // trainer.setWeights(initialWeights)
     val model = trainer.train(data.map(_._1))
   }
 
@@ -51,24 +51,24 @@ class DBNSuite extends FunSuite with MnistDatasetSuite with Matchers {
   }
 
   test("DBN") {
-    val (data, numVisible) = mnistTrainDataset(15000)
+    val (data, numVisible) = mnistTrainDataset(5000)
     val numOut = 10
-    val topology = StackedRBMTopology.multiLayer(Array(numVisible, 100, 500))
+    val topology = StackedRBMTopology.multiLayer(Array(numVisible, 500))
     val topTopology = FeedForwardTopology.multiLayerPerceptron(Array(500, numOut), true)
 
     val trainer = new DBNTrainer(topology, topTopology).
       setNumIterations(500).
       setMiniBatchFraction(0.02).
       setStepSize(0.005).
-      setBatchSize(100)
+      setBatchSize(20).
+      setRegParam(5e-4)
 
-    //  val model = trainer.pretrain(data)
-    //  val ann = trainer.finetune(data, model)
+    val model = trainer.pretrain(data)
+    val ann = trainer.finetune(data, model)
+    // val ann = trainer.finetune(data)
 
-    val ann = trainer.finetune(data)
-
-    val (dataTest, _) = mnistTrainDataset(15000, 5000)
-    println(s"Accuracy: ${1 - error(dataTest, ann)}%1.6f")
+    val (dataTest, _) = mnistTrainDataset(5000, 5000)
+    println(f"Accuracy: ${1 - error(dataTest, ann)}%1.6f")
   }
 
   def error(data: RDD[(Vector, Vector)], nn: TopologyModel): Double = {
@@ -77,8 +77,12 @@ class DBNSuite extends FunSuite with MnistDatasetSuite with Matchers {
     val sumError = data.map { case (x, y) =>
       val h = nn.predict(x)
       if (brzArgMax(y.toBreeze.asInstanceOf[BDV[Double]]) ==
-        brzArgMax(h.toBreeze.asInstanceOf[BDV[Double]])) 0D
-      else 1D
+        brzArgMax(h.toBreeze.asInstanceOf[BDV[Double]])) {
+        0.0
+      }
+      else {
+        1.0
+      }
     }.sum
     sumError / count
   }

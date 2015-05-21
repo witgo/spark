@@ -17,8 +17,7 @@
 
 package org.apache.spark.mllib.ann
 
-import breeze.linalg.{*, DenseMatrix => BDM, DenseVector => BDV, Axis => BrzAxis, sum => brzSum}
-import breeze.numerics.{log => Blog, sigmoid => Bsigmoid}
+import breeze.linalg.{DenseMatrix => BDM, DenseVector => BDV, Axis => BrzAxis, sum => brzSum}
 import org.apache.spark.Logging
 import org.apache.spark.mllib.linalg.{Vector, Vectors}
 import org.apache.spark.mllib.optimization._
@@ -157,7 +156,12 @@ class RBMLayerModel(
 }
 
 object RBMLayerModel {
-  def apply(numIn: Int, numOut: Int, dropoutRate: Double, weights: Vector, position: Int): RBMLayerModel = {
+  def apply(
+    numIn: Int,
+    numOut: Int,
+    dropoutRate: Double,
+    weights: Vector,
+    position: Int): RBMLayerModel = {
     val (w, vb, hb) = unroll(weights, position, numIn, numOut)
     new RBMLayerModel(w, vb, hb, dropoutRate)
   }
@@ -239,7 +243,8 @@ object RBMTopology {
 class RBMTrainer(topology: RBMTopology) extends Serializable {
   private val outputSize = 0
   private var _seed: Long = 41
-  private var _weights = RBMLayerModel(topology.numIn, topology.numOut, topology.dropoutRate, _seed).weights()
+  private var _weights = RBMLayerModel(topology.numIn, topology.numOut,
+    topology.dropoutRate, _seed).weights()
   private var _batchSize = 1
   private var dataStacker = new DataStacker(_batchSize, topology.numIn, outputSize)
   private var _gradient: Gradient = new ANNGradient(topology, dataStacker)
@@ -362,7 +367,7 @@ class StackedRBMTrainer(topology: StackedRBMTopology) extends Serializable with 
         setMiniBatchFraction(miniBatchFraction).
         setStepSize(stepSize).
         setRegParam(regParam)
-      //val updater = new AdaGradUpdater(0, 1e-6, 0.9)
+      // val updater = new AdaGradUpdater(0, 1e-6, 0.9)
       val updater = new EquilibratedUpdater(1e-6, 0)
       trainer.setWeights(initialWeights).setUpdater(updater).setBatchSize(batchSize)
       val rbmModel = trainer.train(dataBatch)
@@ -409,7 +414,8 @@ object StackedRBMTopology {
     val innerRBMs: Array[RBMTopology] = new Array[RBMTopology](numLayer)
     for (layer <- 0 until numLayer) {
       val dropout = if (layer == numLayer - 1) {
-        0.5
+        // 0.5
+        0.0
       } else {
         0.0
       }
@@ -566,7 +572,9 @@ class DBNTrainer(
     trainer.train(data.map(_._1))
   }
 
-  def finetune(data: RDD[(Vector, Vector)], stackedRBMModel: StackedRBMModel = null): TopologyModel = {
+  def finetune(
+    data: RDD[(Vector, Vector)],
+    stackedRBMModel: StackedRBMModel = null): TopologyModel = {
     val s = data.take(1).head
     val inputSize: Int = s._1.size
     val outputSize: Int = s._2.size
@@ -592,12 +600,38 @@ class DBNTrainer(
       setMiniBatchFraction(miniBatchFraction).
       setStepSize(stepSize).
       setRegParam(regParam)
-    val updater = new EquilibratedUpdater(1e-6, 0)
+    val updater = new EquilibratedUpdater(1e-6, 0.5)
     trainer.
       setWeights(initialWeights).
       setUpdater(updater).
       setBatchSize(batchSize)
     val model = trainer.train(data)
     model
+  }
+}
+
+class MLPEquilibratedUpdater(
+  val topology: DropoutTopology,
+  epsilon: Double,
+  momentum: Double) extends
+EquilibratedUpdater(epsilon, momentum) {
+
+  override protected def l2(
+    weightsOld: Vector,
+    gradient: Vector,
+    stepSize: Double,
+    iter: Int,
+    regParam: Double): Double = {
+    if (regParam == 0.0) return 0
+    val thisIterStepSize = stepSize / math.sqrt(iter)
+    val w = topology.getInstance(weightsOld).asInstanceOf[DropoutModel]
+    w.layerModels.indices.foreach { i =>
+      w.layerModels(i) match {
+        case affineLayerModel: AffineLayerModel =>
+          affineLayerModel.w :*= (1.0 - thisIterStepSize * regParam)
+        case _ =>
+      }
+    }
+    0.0
   }
 }

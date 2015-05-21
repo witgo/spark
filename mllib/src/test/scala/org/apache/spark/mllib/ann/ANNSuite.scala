@@ -1,9 +1,25 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
+ *
+ *    http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 package org.apache.spark.mllib.ann
 
 import org.apache.spark.mllib.linalg.Vectors
 import org.apache.spark.mllib.util.MLlibTestSparkContext
 import org.scalatest.FunSuite
-
 
 class ANNSuite extends FunSuite with MLlibTestSparkContext {
 
@@ -31,7 +47,7 @@ class ANNSuite extends FunSuite with MLlibTestSparkContext {
     trainer.setWeights(initialWeights)
     trainer.LBFGSOptimizer.setNumIterations(20)
     val model = trainer.train(rddData)
-    //val model = FeedForwardTrainer.train(rddData, 1, 20, topology, initialWeights)
+    // val model = FeedForwardTrainer.train(rddData, 1, 20, topology, initialWeights)
     val predictionAndLabels = rddData.map { case (input, label) =>
       (model.predict(input)(0), label(0))
     }.collect()
@@ -62,7 +78,7 @@ class ANNSuite extends FunSuite with MLlibTestSparkContext {
     val initialWeights = FeedForwardModel(topology, 23124).weights()
     val trainer = new FeedForwardTrainer(topology, 2, 2)
     trainer.SGDOptimizer.setNumIterations(2000)
-    //trainer.LBFGSOptimizer.setNumIterations(100)
+    // trainer.LBFGSOptimizer.setNumIterations(100)
     trainer.setWeights(initialWeights)
     val model = trainer.train(rddData)
     val predictionAndLabels = rddData.map { case (input, label) =>
