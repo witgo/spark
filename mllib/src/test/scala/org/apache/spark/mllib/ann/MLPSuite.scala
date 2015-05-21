@@ -25,7 +25,7 @@ class MLPSuite extends FunSuite with MnistDatasetSuite with Matchers {
     val (data, numVisible) = mnistTrainDataset(5000)
     val hiddenLayersTopology = Array[Int](20)
     val layerSizes = numVisible +: hiddenLayersTopology :+ 10
-    val topology = Topology.multiLayerPerceptron(layerSizes, true)
+    val topology = FeedForwardTopology.multiLayerPerceptron(layerSizes, true)
     val initialWeights = FeedForwardModel(topology, 117).weights()
     val trainer = new FeedForwardTrainer(topology, numVisible, 10)
     trainer.LBFGSOptimizer.setNumIterations(100)
@@ -38,7 +38,7 @@ class MLPSuite extends FunSuite with MnistDatasetSuite with Matchers {
     val (data, numVisible) = mnistTrainDataset(5000)
     val hiddenLayersTopology = Array[Int](20)
     val layerSizes = numVisible +: hiddenLayersTopology :+ 10
-    val topology = Topology.multiLayerPerceptron(layerSizes, true)
+    val topology = FeedForwardTopology.multiLayerPerceptron(layerSizes, true)
     val initialWeights = FeedForwardModel(topology, 117).weights()
     val trainer = new FeedForwardTrainer(topology, numVisible, 10)
     trainer.SGDOptimizer.setNumIterations(2000).setMiniBatchFraction(1).setStepSize(0.1)

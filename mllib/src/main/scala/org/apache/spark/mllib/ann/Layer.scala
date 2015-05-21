@@ -58,7 +58,7 @@ class AffineLayer(val numIn: Int, val numOut: Int) extends Layer {
 
 /* Model of affine Layer
 * */
-class AffineLayerModel private(w: BDM[Double], b: BDV[Double]) extends LayerModel {
+class AffineLayerModel private[ann](val w: BDM[Double], val b: BDV[Double]) extends LayerModel {
   val size = w.size + b.length
   val gwb = new Array[Double](size)
   private lazy val gw: BDM[Double] = new BDM[Double](w.rows, w.cols, gwb)
@@ -257,7 +257,7 @@ class FunctionalLayer (val activationFunction: ActivationFunction) extends Layer
 
 /* Functional layer model. Holds no parameters (weights).
 * */
-class FunctionalLayerModel private (val activationFunction: ActivationFunction
+class FunctionalLayerModel private[ann] (val activationFunction: ActivationFunction
                                      ) extends LayerModel {
   val size = 0
 
