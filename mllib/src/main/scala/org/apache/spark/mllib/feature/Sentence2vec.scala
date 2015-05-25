@@ -396,8 +396,8 @@ object Sentence2vec {
     val word2Vec = BDV.rand[Double](vectorSize * termSize, Rand.gaussian)
     word2Vec :*= 1e-2
 
-    val sentenceLayer = initSentenceLayer(vectorSize, Array(64, vectorSize / 2), Array(7, 4))
-    val mlpLayer = initMLPLayers(Array(vectorSize * 2, 128, vectorSize), vectorSize)
+    val sentenceLayer = initSentenceLayer(vectorSize, Array(84), Array(6))
+    val mlpLayer = initMLPLayers(Array(84 * 6, 512, vectorSize), vectorSize)
     val mlp = new MLP(mlpLayer, Array(0.5, 0.0))
     val sent2vec = new Sentence2vec(sentenceLayer, mlp, vectorSize)
     val gradSum = new Array[(BDM[Double], BDV[Double])](sent2vec.numLayer)
@@ -446,7 +446,7 @@ object Sentence2vec {
     kernels: Array[Int]): Array[BaseLayer] = {
     val numLayer = outChannels.length * 2
     val sentenceLayer: Array[BaseLayer] = new Array[BaseLayer](numLayer)
-    for (i <- 0 until outChannels.length) {
+    outChannels.indices.foreach { i =>
       val layerOutChannels = outChannels(i)
       val layerKernels = kernels(i)
       val layer = if (i == 0) {
@@ -488,7 +488,7 @@ object Sentence2vec {
       else {
         new TanhLayer(numIn, numOut)
       }
-      println(s"layers($layer) = ${numIn} * ${numOut}")
+      println(s"layers($layer) = $numIn * $numOut")
     }
     layers
   }
