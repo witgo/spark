@@ -431,7 +431,7 @@ object Sentence2vec {
           m._2 :/= miniBatchSize.toDouble
         })
         println(s"loss $iter : " + (loss / miniBatchSize))
-        equilibratedUpdater(gradMomentumSum, gradSum, grad, wordMomentumSum, wordGradSum, wordGrad,
+        adaGradUpdater(gradMomentumSum, gradSum, grad, wordMomentumSum, wordGradSum, wordGrad,
           word2Vec, sent2vec, iter, learningRate)
       }
       sentBroadcast.destroy(blocking = false)
@@ -614,11 +614,18 @@ object Sentence2vec {
     val lr = learningRate
     val numSentenceLayer = sent2Vec.numSentenceLayer
 
-    val wg2 = (wordGrad :* wordGrad).mapValues(v => v * math.pow(Utils.random.nextGaussian(), 2))
+    //  val wg2 = (wordGrad :* wordGrad).mapValues(v => v * math.pow(Utils.random.nextGaussian(), 2))
+    //  wordGradSum :+= wg2
+    //  for (gi <- 0 until wordGrad.length) {
+    //    wordGrad(gi) /= (epsilon + math.sqrt(wordGradSum(gi) / iter))
+    //  }
+
+    val wg2 = (wordGrad :* wordGrad)
     wordGradSum :+= wg2
     for (gi <- 0 until wordGrad.length) {
-      wordGrad(gi) /= (epsilon + math.sqrt(wordGradSum(gi) / iter))
+      wordGrad(gi) /= (epsilon + math.sqrt(wordGradSum(gi)))
     }
+
     if (momentum > 0D && momentum < 1D) {
       wordGrad :*= (1 - momentum)
       brzAxpy(momentum, wordMomentumSum, wordGrad)
