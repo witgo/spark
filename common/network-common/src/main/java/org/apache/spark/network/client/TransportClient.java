@@ -37,6 +37,7 @@ import io.netty.channel.ChannelFutureListener;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import org.apache.spark.network.buffer.ChunkedByteBuffer;
 import org.apache.spark.network.buffer.NioManagedBuffer;
 import org.apache.spark.network.protocol.ChunkFetchRequest;
 import org.apache.spark.network.protocol.OneWayMessage;
@@ -220,7 +221,8 @@ public class TransportClient implements Closeable {
    * @param callback Callback to handle the RPC's reply.
    * @return The RPC's id.
    */
-  public long sendRpc(ByteBuffer message, final RpcResponseCallback callback) {
+  public long sendRpc(ChunkedByteBuffer message, final RpcResponseCallback callback) {
+    final String serverAddr = getRemoteAddress(channel);
     final long startTime = System.currentTimeMillis();
     if (logger.isTraceEnabled()) {
       logger.trace("Sending RPC to {}", getRemoteAddress(channel));
@@ -260,17 +262,12 @@ public class TransportClient implements Closeable {
    * Synchronously sends an opaque message to the RpcHandler on the server-side, waiting for up to
    * a specified timeout for a response.
    */
-  public ByteBuffer sendRpcSync(ByteBuffer message, long timeoutMs) {
-    final SettableFuture<ByteBuffer> result = SettableFuture.create();
-
+  public ChunkedByteBuffer sendRpcSync(ChunkedByteBuffer message, long timeoutMs) {
+    final SettableFuture<ChunkedByteBuffer> result = SettableFuture.create();
     sendRpc(message, new RpcResponseCallback() {
       @Override
-      public void onSuccess(ByteBuffer response) {
-        ByteBuffer copy = ByteBuffer.allocate(response.remaining());
-        copy.put(response);
-        // flip "copy" to make it readable
-        copy.flip();
-        result.set(copy);
+      public void onSuccess(ChunkedByteBuffer response) {
+        result.set(response);
       }
 
       @Override
@@ -294,14 +291,14 @@ public class TransportClient implements Closeable {
    *
    * @param message The message to send.
    */
-  public void send(ByteBuffer message) {
+  public void send(ChunkedByteBuffer message) {
     channel.writeAndFlush(new OneWayMessage(new NioManagedBuffer(message)));
   }
 
   /**
    * Removes any state associated with the given RPC.
    *
-   * @param requestId The RPC id returned by {@link #sendRpc(ByteBuffer, RpcResponseCallback)}.
+   * @param requestId The RPC id returned by {@link #sendRpc(ChunkedByteBuffer, RpcResponseCallback)}.
    */
   public void removeRpcRequest(long requestId) {
     handler.removeRpcRequest(requestId);
