@@ -122,7 +122,7 @@ abstract class SerializerInstance {
   }
 
   def deserialize[T: ClassTag](in: InputStream): T
-
+  
   def deserialize[T: ClassTag](in: InputStream, loader: ClassLoader): T
 
   def serializeStream(s: OutputStream): SerializationStream

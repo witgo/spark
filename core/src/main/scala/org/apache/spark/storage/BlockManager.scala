@@ -528,9 +528,9 @@ private[spark] class BlockManager(
    */
   private def getRemoteValues(blockId: BlockId): Option[BlockResult] = {
     getRemoteBytes(blockId).map { data =>
-      val values =
-        serializerManager.dataDeserializeStream(blockId, data.toInputStream(true))
-      new BlockResult(values, DataReadMethod.Network, data.size)
+      val values = serializerManager.dataDeserializeStream(blockId, data.createInputStream())
+      new BlockResult(CompletionIterator(values, data.release()),
+        DataReadMethod.Network, data.size)
     }
   }
 
@@ -547,7 +547,7 @@ private[spark] class BlockManager(
   /**
    * Get block from remote block managers as serialized bytes.
    */
-  def getRemoteBytes(blockId: BlockId): Option[ChunkedByteBuffer] = {
+  def getRemoteBytes(blockId: BlockId): Option[ManagedBuffer] = {
     logDebug(s"Getting remote block $blockId")
     require(blockId != null, "BlockId is null")
     var runningFailureCount = 0
@@ -559,8 +559,34 @@ private[spark] class BlockManager(
       val loc = locationIterator.next()
       logDebug(s"Getting remote block $blockId from $loc")
       val data = try {
-        blockTransferService.fetchBlockSync(
-          loc.host, loc.port, loc.executorId, blockId.toString).nioByteBuffer()
+        val managedBuffer = blockTransferService.fetchBlockSync(
+          loc.host, loc.port, loc.executorId, blockId.toString)
+        val dataSize = managedBuffer.size()
+        val success = memoryManager.acquireUnrollMemory(blockId,
+          managedBuffer.size(), MemoryMode.ON_HEAP)
+        if (success) {
+          val chunkSize = math.min(dataSize, 32 * 1024).toInt
+          val out = new ChunkedByteBufferOutputStream(chunkSize)
+          try {
+            Utils.copyStream(managedBuffer.createInputStream(), out, closeStreams = true)
+            if (out.size() != dataSize) {
+              throw new SparkException(s"buffer size ${out.size()} but expected $dataSize")
+            }
+          } finally {
+            managedBuffer.release()
+          }
+          new ReferenceCountedManagedBuffer(out.toChunkedByteBuffer, () =>
+            memoryManager.releaseUnrollMemory(managedBuffer.size(), MemoryMode.ON_HEAP))
+        } else {
+          val (tempLocalBlockId, _) = diskBlockManager.createTempLocalBlock()
+          diskStore.put(tempLocalBlockId) { fileOutputStream =>
+            val inputStream = managedBuffer.createInputStream()
+            Utils.copyStream(inputStream, fileOutputStream)
+            inputStream.close()
+          }
+          val onDeallocate: () => Unit = () => diskStore.remove(tempLocalBlockId)
+          new ReferenceCountedManagedBuffer(diskStore.getBlockData(tempLocalBlockId), onDeallocate)
+        }
       } catch {
         case NonFatal(e) =>
           runningFailureCount += 1
