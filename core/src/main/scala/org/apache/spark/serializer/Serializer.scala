@@ -115,6 +115,10 @@ abstract class SerializerInstance {
 
   def deserialize[T: ClassTag](bytes: ChunkedByteBuffer): T
 
+  def deserialize[T: ClassTag](s: InputStream): T = {
+    deserializeStream(s).readObject[T]()
+  }
+
   def deserialize[T: ClassTag](bytes: ChunkedByteBuffer, loader: ClassLoader): T
 
   def serializeStream(s: OutputStream): SerializationStream
