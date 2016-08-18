@@ -18,6 +18,7 @@
 package org.apache.spark.network.client;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.util.Map;
 import java.util.Queue;
 import java.util.concurrent.ConcurrentHashMap;
@@ -29,6 +30,8 @@ import io.netty.channel.Channel;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import org.apache.spark.network.buffer.InputStreamManagedBuffer;
+import org.apache.spark.network.buffer.ManagedBuffer;
 import org.apache.spark.network.protocol.ChunkFetchFailure;
 import org.apache.spark.network.protocol.ChunkFetchSuccess;
 import org.apache.spark.network.protocol.ResponseMessage;
@@ -143,8 +146,8 @@ public class TransportResponseHandler extends MessageHandler<ResponseMessage> {
   public void handle(ResponseMessage message) throws Exception {
     String remoteAddress = NettyUtils.getRemoteAddress(channel);
     if (message instanceof ChunkFetchSuccess) {
-      ChunkFetchSuccess resp = (ChunkFetchSuccess) message;
-      ChunkReceivedCallback listener = outstandingFetches.get(resp.streamChunkId);
+      final ChunkFetchSuccess resp = (ChunkFetchSuccess) message;
+      final ChunkReceivedCallback listener = outstandingFetches.get(resp.streamChunkId);
       if (listener == null) {
         logger.warn("Ignoring response for block {} from {} since it is not outstanding",
             resp.streamChunkId, remoteAddress);
@@ -155,17 +158,7 @@ public class TransportResponseHandler extends MessageHandler<ResponseMessage> {
           listener.onSuccess(resp.streamChunkId.chunkIndex, resp.body());
           resp.body().release();
         } else {
-          ChunkFetchInputStream inputStream = new ChunkFetchInputStream(this, channel,
-              resp.streamChunkId, resp.byteCount, listener);
-          try {
-            TransportFrameDecoder frameDecoder = (TransportFrameDecoder)
-                channel.pipeline().get(TransportFrameDecoder.HANDLER_NAME);
-            frameDecoder.setInterceptor(inputStream.interceptor);
-            streamActive = true;
-          } catch (Exception e) {
-            logger.error("Error installing stream handler.", e);
-            deactivateStream();
-          }
+          handleChunkFetchSuccessWithoutBodyInFrame(resp, listener);
         }
       }
     } else if (message instanceof ChunkFetchFailure) {
@@ -262,4 +255,33 @@ public class TransportResponseHandler extends MessageHandler<ResponseMessage> {
     timeOfLastRequestNs.set(System.nanoTime());
   }
 
+  private void handleChunkFetchSuccessWithoutBodyInFrame(
+      final ChunkFetchSuccess resp,
+      final ChunkReceivedCallback listener) throws Exception {
+    InputStreamInterceptor.InputStreamCallback callback =
+        new InputStreamInterceptor.InputStreamCallback() {
+          @Override
+          public void onSuccess(InputStream inputStream) throws IOException {
+            ManagedBuffer managedBuffer =
+                new InputStreamManagedBuffer(inputStream, resp.byteCount);
+            listener.onSuccess(resp.streamChunkId.chunkIndex, managedBuffer);
+          }
+
+          @Override
+          public void onFailure(Throwable cause) throws IOException {
+            listener.onFailure(resp.streamChunkId.chunkIndex, cause);
+          }
+        };
+    InputStreamInterceptor inputStream =
+        new InputStreamInterceptor(this, channel, resp.byteCount, callback);
+    try {
+      TransportFrameDecoder frameDecoder = (TransportFrameDecoder)
+          channel.pipeline().get(TransportFrameDecoder.HANDLER_NAME);
+      frameDecoder.setInterceptor(inputStream.interceptor);
+      streamActive = true;
+    } catch (Exception e) {
+      logger.error("Error installing stream handler.", e);
+      deactivateStream();
+    }
+  }
 }

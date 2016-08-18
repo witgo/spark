@@ -33,19 +33,16 @@ import io.netty.channel.Channel;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import org.apache.spark.network.buffer.ManagedBuffer;
-import org.apache.spark.network.protocol.StreamChunkId;
 import org.apache.spark.network.util.LimitedInputStream;
 import org.apache.spark.network.util.TransportFrameDecoder;
 
-public class ChunkFetchInputStream extends InputStream {
-  private final Logger logger = LoggerFactory.getLogger(ChunkFetchInputStream.class);
+public class InputStreamInterceptor extends InputStream {
+  private final Logger logger = LoggerFactory.getLogger(InputStreamInterceptor.class);
 
   private final TransportResponseHandler handler;
   private final Channel channel;
-  private final StreamChunkId streamId;
   private final long byteCount;
-  private final ChunkReceivedCallback callback;
+  private final InputStreamCallback callback;
   private final LinkedBlockingQueue<ByteBuf> buffers = new LinkedBlockingQueue<>(1024);
   public final TransportFrameDecoder.Interceptor interceptor;
 
@@ -54,19 +51,16 @@ public class ChunkFetchInputStream extends InputStream {
   private boolean isCallbacked = false;
   private long writerIndex = 0;
 
-
   private final AtomicReference<Throwable> cause = new AtomicReference<>(null);
   private final AtomicBoolean isClosed = new AtomicBoolean(false);
 
-  public ChunkFetchInputStream(
+  public InputStreamInterceptor(
       TransportResponseHandler handler,
       Channel channel,
-      StreamChunkId streamId,
       long byteCount,
-      ChunkReceivedCallback callback) {
+      InputStreamCallback callback) {
     this.handler = handler;
     this.channel = channel;
-    this.streamId = streamId;
     this.byteCount = byteCount;
     this.callback = callback;
     this.interceptor = new StreamInterceptor();
@@ -168,11 +162,9 @@ public class ChunkFetchInputStream extends InputStream {
   private void onSuccess() throws IOException {
     if (isCallbacked) return;
     if (cause.get() != null) {
-      callback.onFailure(streamId.chunkIndex, cause.get());
+      callback.onFailure(cause.get());
     } else {
-      InputStream inputStream = new LimitedInputStream(this, byteCount);
-      ManagedBuffer managedBuffer = new InputStreamManagedBuffer(inputStream, byteCount);
-      callback.onSuccess(streamId.chunkIndex, managedBuffer);
+      callback.onSuccess(new LimitedInputStream(this, byteCount));
     }
     isCallbacked = true;
   }
@@ -222,7 +214,7 @@ public class ChunkFetchInputStream extends InputStream {
         } else {
           frame.release();
         }
-        logger.trace(streamId + ", writerIndex  " + writerIndex + " byteCount, " + byteCount);
+        logger.trace("writerIndex  " + writerIndex + " byteCount, " + byteCount);
         onSuccess();
       } catch (Exception e) {
         setCause(e);
@@ -257,39 +249,16 @@ public class ChunkFetchInputStream extends InputStream {
     }
   }
 
-  private class InputStreamManagedBuffer extends ManagedBuffer {
-    private final InputStream inputStream;
-    private final long byteCount;
+  public static interface InputStreamCallback {
 
-    InputStreamManagedBuffer(InputStream inputStream, long byteCount) {
-      this.inputStream = inputStream;
-      this.byteCount = byteCount;
-    }
+    /**
+     * Called when all data from the stream has been received.
+     */
+    void onSuccess(InputStream inputStream) throws IOException;
 
-    public long size() {
-      return byteCount;
-    }
-
-    public ByteBuffer nioByteBuffer() throws IOException {
-      throw new UnsupportedOperationException("nioByteBuffer");
-    }
-
-    public InputStream createInputStream() throws IOException {
-      return inputStream;
-    }
-
-    public ManagedBuffer retain() {
-      // throw new UnsupportedOperationException("retain");
-      return this;
-    }
-
-    public ManagedBuffer release() {
-      // throw new UnsupportedOperationException("release");
-      return this;
-    }
-
-    public Object convertToNetty() throws IOException {
-      throw new UnsupportedOperationException("convertToNetty");
-    }
+    /**
+     * Called if there's an error reading data from the InputStream.
+     */
+    void onFailure(Throwable cause) throws IOException;
   }
 }
