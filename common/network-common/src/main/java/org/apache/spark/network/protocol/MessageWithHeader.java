@@ -71,8 +71,8 @@ class MessageWithHeader extends AbstractReferenceCounted implements FileRegion {
       ByteBuf header,
       Object body,
       long bodyLength) {
-    Preconditions.checkArgument(body instanceof ByteBuf || body instanceof FileRegion,
-      "Body must be a ByteBuf or a FileRegion.");
+    Preconditions.checkArgument(body instanceof ByteBuf ||  body instanceof ByteBuf[] ||
+            body instanceof FileRegion, "Body must be a ByteBuf or a FileRegion.");
     this.managedBuffer = managedBuffer;
     this.header = header;
     this.headerLength = header.readableBytes();
@@ -121,6 +121,10 @@ class MessageWithHeader extends AbstractReferenceCounted implements FileRegion {
       writtenBody = ((FileRegion) body).transferTo(target, totalBytesTransferred - headerLength);
     } else if (body instanceof ByteBuf) {
       writtenBody = copyByteBuf((ByteBuf) body, target);
+    } else if (body instanceof ByteBuf[]) {
+      for (ByteBuf buf : (ByteBuf[]) body) {
+        writtenBody += copyByteBuf(buf, target);
+      }
     }
     totalBytesTransferred += writtenBody;
 

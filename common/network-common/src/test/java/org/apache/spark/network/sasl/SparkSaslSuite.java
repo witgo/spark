@@ -139,10 +139,10 @@ public class SparkSaslSuite {
     RpcHandler rpcHandler = mock(RpcHandler.class);
     doAnswer(new Answer<Void>() {
         @Override
-        public Void answer(InvocationOnMock invocation) {
-          ByteBuffer message = (ByteBuffer) invocation.getArguments()[1];
+        public Void answer(InvocationOnMock invocation) throws Throwable {
+          ChunkedByteBuffer message = (ChunkedByteBuffer) invocation.getArguments()[1];
           RpcResponseCallback cb = (RpcResponseCallback) invocation.getArguments()[2];
-          assertEquals("Ping", JavaUtils.bytesToString(message));
+          assertEquals("Ping", JavaUtils.bytesToString(message.toByteBuffer()));
           cb.onSuccess(ChunkedByteBuffer.wrap(JavaUtils.stringToBytes("Pong")));
           return null;
         }

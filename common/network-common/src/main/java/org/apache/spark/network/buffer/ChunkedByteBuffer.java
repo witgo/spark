@@ -130,6 +130,9 @@ public class ChunkedByteBuffer implements Externalizable {
    * Wrap this buffer to view it as a Netty ByteBuf.
    */
   public ByteBuf toNetty() {
+    long len = size();
+    Preconditions.checkArgument(size() <= Integer.MAX_VALUE,
+        "Too large frame: %s", new Object[]{Long.valueOf(len)});
     return Unpooled.wrappedBuffer(getChunks());
   }
 
