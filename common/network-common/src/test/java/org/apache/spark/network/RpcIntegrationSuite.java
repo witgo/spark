@@ -62,12 +62,7 @@ public class RpcIntegrationSuite {
           TransportClient client,
           ChunkedByteBuffer message,
           RpcResponseCallback callback) {
-        String msg ;
-        try {
-          msg = JavaUtils.bytesToString(message.toByteBuffer());
-        } catch (IOException e) {
-          throw new RuntimeException("Thrown: ", e);
-        }
+        String msg = JavaUtils.bytesToString(message.toByteBuffer());
         String[] parts = msg.split("/");
         if (parts[0].equals("hello")) {
           callback.onSuccess(ChunkedByteBuffer.wrap(
@@ -81,12 +76,7 @@ public class RpcIntegrationSuite {
 
       @Override
       public void receive(TransportClient client, ChunkedByteBuffer message) {
-        String msg;
-        try {
-          msg = JavaUtils.bytesToString(message.toByteBuffer());
-        } catch (IOException e) {
-          throw new RuntimeException("Thrown: ", e);
-        }
+        String msg = JavaUtils.bytesToString(message.toByteBuffer());
         oneWayMsgs.add(msg);
       }
 
@@ -121,12 +111,7 @@ public class RpcIntegrationSuite {
     RpcResponseCallback callback = new RpcResponseCallback() {
       @Override
       public void onSuccess(ChunkedByteBuffer message) {
-        String response ;
-        try {
-          response = JavaUtils.bytesToString(message.toByteBuffer());
-        } catch (IOException e) {
-          throw new RuntimeException("Thrown: ", e);
-        }
+        String response = JavaUtils.bytesToString(message.toByteBuffer());
         res.successMessages.add(response);
         sem.release();
       }

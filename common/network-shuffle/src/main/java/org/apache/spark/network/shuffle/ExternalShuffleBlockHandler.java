@@ -80,8 +80,14 @@ public class ExternalShuffleBlockHandler extends RpcHandler {
 
   @Override
   public void receive(TransportClient client, ChunkedByteBuffer message, RpcResponseCallback callback) {
-    BlockTransferMessage msgObj = BlockTransferMessage.Decoder.fromByteBuffer(message);
-    handleMessage(msgObj, client, callback);
+    BlockTransferMessage msgObj = null;
+    try {
+      msgObj = BlockTransferMessage.Decoder.fromByteBuffer(message);
+    } catch (IOException e) {
+      callback.onFailure(e);
+    }
+
+    if (msgObj != null) handleMessage(msgObj, client, callback);
   }
 
   protected void handleMessage(

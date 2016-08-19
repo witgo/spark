@@ -17,10 +17,12 @@
 
 package org.apache.spark.network.shuffle.protocol;
 
+import java.io.DataInput;
+import java.io.DataOutput;
+import java.io.IOException;
 import java.util.Arrays;
 
 import com.google.common.base.Objects;
-import io.netty.buffer.ByteBuf;
 
 import org.apache.spark.network.protocol.Encoders;
 
@@ -68,20 +70,20 @@ public class OpenBlocks extends BlockTransferMessage {
   }
 
   @Override
-  public int encodedLength() {
+  public long encodedLength() {
     return Encoders.Strings.encodedLength(appId)
       + Encoders.Strings.encodedLength(execId)
       + Encoders.StringArrays.encodedLength(blockIds);
   }
 
   @Override
-  public void encode(ByteBuf buf) {
+  public void encode(DataOutput buf) throws IOException {
     Encoders.Strings.encode(buf, appId);
     Encoders.Strings.encode(buf, execId);
     Encoders.StringArrays.encode(buf, blockIds);
   }
 
-  public static OpenBlocks decode(ByteBuf buf) {
+  public static OpenBlocks decode(DataInput buf) throws IOException {
     String appId = Encoders.Strings.decode(buf);
     String execId = Encoders.Strings.decode(buf);
     String[] blockIds = Encoders.StringArrays.decode(buf);

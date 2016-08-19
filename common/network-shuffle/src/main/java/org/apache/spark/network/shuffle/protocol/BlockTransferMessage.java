@@ -17,12 +17,14 @@
 
 package org.apache.spark.network.shuffle.protocol;
 
+import java.io.*;
 import java.nio.ByteBuffer;
 
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
 
 import org.apache.spark.network.buffer.ChunkedByteBuffer;
+import org.apache.spark.network.buffer.ChunkedByteBufferOutputStream;
 import org.apache.spark.network.protocol.Encodable;
 import org.apache.spark.network.shuffle.protocol.mesos.RegisterDriver;
 import org.apache.spark.network.shuffle.protocol.mesos.ShuffleServiceHeartbeat;
@@ -37,8 +39,19 @@ import org.apache.spark.network.shuffle.protocol.mesos.ShuffleServiceHeartbeat;
  *   - UploadBlock is only handled by the NettyBlockTransferService.
  *   - RegisterExecutor is only handled by the external shuffle service.
  */
-public abstract class BlockTransferMessage implements Encodable {
+public abstract class BlockTransferMessage {
   protected abstract Type type();
+
+  /**
+   * Serializes this object by writing into the given ByteBuf.
+   * This method must write exactly encodedLength() bytes.
+   */
+  public abstract void encode(DataOutput output) throws IOException;
+
+  /**
+   * Number of bytes of the encoded form of this object.
+   */
+  public abstract long encodedLength();
 
   /** Preceding every serialized message is its type, which allows us to deserialize it. */
   public enum Type {
@@ -58,8 +71,8 @@ public abstract class BlockTransferMessage implements Encodable {
   // NB: Java does not support static methods in interfaces, so we must put this in a static class.
   public static class Decoder {
     /** Deserializes the 'type' byte followed by the message itself. */
-    public static BlockTransferMessage fromByteBuffer(ChunkedByteBuffer msg) {
-      ByteBuf buf = msg.toNetty();
+    public static BlockTransferMessage fromByteBuffer(ChunkedByteBuffer msg) throws IOException {
+      DataInput buf = new DataInputStream(msg.toInputStream());
       byte type = buf.readByte();
       switch (type) {
         case 0: return OpenBlocks.decode(buf);
@@ -74,16 +87,19 @@ public abstract class BlockTransferMessage implements Encodable {
   }
 
   /** Serializes the 'type' byte followed by the message itself. */
-  public ByteBuffer toByteBuffer() {
-    // Allow room for encoded message, plus the type byte
-    ByteBuf buf = Unpooled.buffer(encodedLength() + 1);
-    buf.writeByte(type().id);
-    encode(buf);
-    assert buf.writableBytes() == 0 : "Writable bytes remain: " + buf.writableBytes();
-    return buf.nioBuffer();
+  public ChunkedByteBuffer toChunkedByteBuffer(){
+    try {
+      ChunkedByteBufferOutputStream outputStream = new ChunkedByteBufferOutputStream(4 * 1024);
+      DataOutputStream out = new DataOutputStream(outputStream);
+      // Allow room for encoded message, plus the type byte
+      out.writeByte(type().id);
+      encode(out);
+      out.close();
+      ChunkedByteBuffer buf = outputStream.toChunkedByteBuffer();
+      return buf;
+    } catch (Throwable e) {
+      throw new RuntimeException(e);
+    }
   }
-  /** Serializes the 'type' byte followed by the message itself. */
-  public ChunkedByteBuffer toChunkedByteBuffer() {
-    return ChunkedByteBuffer.wrap(toByteBuffer());
-  }
+
 }

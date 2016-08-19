@@ -17,6 +17,10 @@
 
 package org.apache.spark.network.protocol;
 
+import java.io.DataInput;
+import java.io.DataOutput;
+import java.io.IOException;
+import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 
 import io.netty.buffer.ByteBuf;
@@ -36,10 +40,23 @@ public class Encoders {
       buf.writeBytes(bytes);
     }
 
+    public static void encode(DataOutput buf, String s) throws IOException {
+      byte[] bytes = s.getBytes(StandardCharsets.UTF_8);
+      buf.writeInt(bytes.length);
+      buf.write(bytes);
+    }
+
     public static String decode(ByteBuf buf) {
       int length = buf.readInt();
       byte[] bytes = new byte[length];
       buf.readBytes(bytes);
+      return new String(bytes, StandardCharsets.UTF_8);
+    }
+
+    public static String decode(DataInput buf) throws IOException {
+      int length = buf.readInt();
+      byte[] bytes = new byte[length];
+      buf.readFully(bytes);
       return new String(bytes, StandardCharsets.UTF_8);
     }
   }
@@ -55,10 +72,22 @@ public class Encoders {
       buf.writeBytes(arr);
     }
 
+    public static void encode(DataOutput buf, byte[] arr) throws IOException {
+      buf.writeInt(arr.length);
+      buf.write(arr);
+    }
+
     public static byte[] decode(ByteBuf buf) {
       int length = buf.readInt();
       byte[] bytes = new byte[length];
       buf.readBytes(bytes);
+      return bytes;
+    }
+
+    public static byte[] decode(DataInput buf) throws IOException {
+      int length = buf.readInt();
+      byte[] bytes = new byte[length];
+      buf.readFully(bytes);
       return bytes;
     }
   }
@@ -80,10 +109,26 @@ public class Encoders {
       }
     }
 
+    public static void encode(DataOutput buf, String[] strings) throws IOException {
+      buf.writeInt(strings.length);
+      for (String s : strings) {
+        Strings.encode(buf, s);
+      }
+    }
+
     public static String[] decode(ByteBuf buf) {
       int numStrings = buf.readInt();
       String[] strings = new String[numStrings];
       for (int i = 0; i < strings.length; i ++) {
+        strings[i] = Strings.decode(buf);
+      }
+      return strings;
+    }
+
+    public static String[] decode(DataInput buf) throws IOException {
+      int numStrings = buf.readInt();
+      String[] strings = new String[numStrings];
+      for (int i = 0; i < strings.length; i++) {
         strings[i] = Strings.decode(buf);
       }
       return strings;

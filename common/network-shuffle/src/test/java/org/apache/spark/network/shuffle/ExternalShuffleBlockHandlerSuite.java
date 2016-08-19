@@ -17,6 +17,7 @@
 
 package org.apache.spark.network.shuffle;
 
+import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.util.Iterator;
 
@@ -80,7 +81,7 @@ public class ExternalShuffleBlockHandlerSuite {
 
   @SuppressWarnings("unchecked")
   @Test
-  public void testOpenShuffleBlocks() {
+  public void testOpenShuffleBlocks() throws IOException {
     RpcResponseCallback callback = mock(RpcResponseCallback.class);
 
     ManagedBuffer block0Marker = new NioManagedBuffer(ByteBuffer.wrap(new byte[3]));
@@ -125,7 +126,7 @@ public class ExternalShuffleBlockHandlerSuite {
   }
 
   @Test
-  public void testBadMessages() {
+  public void testBadMessages() throws IOException {
     RpcResponseCallback callback = mock(RpcResponseCallback.class);
 
     ChunkedByteBuffer unserializableMsg =ChunkedByteBuffer.wrap(new byte[] { 0x12, 0x34, 0x56 });
@@ -137,7 +138,7 @@ public class ExternalShuffleBlockHandlerSuite {
     }
 
     ChunkedByteBuffer unexpectedMsg = new UploadBlock("a", "e", "b", new byte[1],
-      new byte[2]).toChunkedByteBuffer();
+        ChunkedByteBuffer.wrap(new byte[2])).toChunkedByteBuffer();
     try {
       handler.receive(client, unexpectedMsg, callback);
       fail("Should have thrown");

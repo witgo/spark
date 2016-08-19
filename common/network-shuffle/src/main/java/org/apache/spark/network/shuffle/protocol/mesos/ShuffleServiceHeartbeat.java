@@ -17,7 +17,10 @@
 
 package org.apache.spark.network.shuffle.protocol.mesos;
 
-import io.netty.buffer.ByteBuf;
+import java.io.DataInput;
+import java.io.DataOutput;
+import java.io.IOException;
+
 import org.apache.spark.network.protocol.Encoders;
 import org.apache.spark.network.shuffle.protocol.BlockTransferMessage;
 
@@ -40,14 +43,14 @@ public class ShuffleServiceHeartbeat extends BlockTransferMessage {
   protected Type type() { return Type.HEARTBEAT; }
 
   @Override
-  public int encodedLength() { return Encoders.Strings.encodedLength(appId); }
+  public long encodedLength() { return Encoders.Strings.encodedLength(appId); }
 
   @Override
-  public void encode(ByteBuf buf) {
+  public void encode(DataOutput buf) throws IOException {
     Encoders.Strings.encode(buf, appId);
   }
 
-  public static ShuffleServiceHeartbeat decode(ByteBuf buf) {
+  public static ShuffleServiceHeartbeat decode(DataInput buf) throws IOException  {
     return new ShuffleServiceHeartbeat(Encoders.Strings.decode(buf));
   }
 }

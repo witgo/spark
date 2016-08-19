@@ -23,6 +23,10 @@ import io.netty.buffer.ByteBuf;
 import org.apache.spark.network.protocol.Encoders;
 
 // Needed by ScalaDoc. See SPARK-7726
+import java.io.DataInput;
+import java.io.DataOutput;
+import java.io.IOException;
+
 import static org.apache.spark.network.shuffle.protocol.BlockTransferMessage.Type;
 
 /**
@@ -72,20 +76,20 @@ public class RegisterExecutor extends BlockTransferMessage {
   }
 
   @Override
-  public int encodedLength() {
+  public long encodedLength() {
     return Encoders.Strings.encodedLength(appId)
       + Encoders.Strings.encodedLength(execId)
       + executorInfo.encodedLength();
   }
 
   @Override
-  public void encode(ByteBuf buf) {
+  public void encode(DataOutput buf) throws IOException {
     Encoders.Strings.encode(buf, appId);
     Encoders.Strings.encode(buf, execId);
     executorInfo.encode(buf);
   }
 
-  public static RegisterExecutor decode(ByteBuf buf) {
+  public static RegisterExecutor decode(DataInput buf) throws IOException {
     String appId = Encoders.Strings.decode(buf);
     String execId = Encoders.Strings.decode(buf);
     ExecutorShuffleInfo executorShuffleInfo = ExecutorShuffleInfo.decode(buf);

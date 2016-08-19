@@ -227,7 +227,7 @@ public class SaslIntegrationSuite {
         new String[] { System.getProperty("java.io.tmpdir") }, 1,
           "org.apache.spark.shuffle.sort.SortShuffleManager");
       RegisterExecutor regmsg = new RegisterExecutor("app-1", "0", executorInfo);
-      client1.sendRpcSync(ChunkedByteBuffer.wrap(regmsg.toByteBuffer()), TIMEOUT_MS);
+      client1.sendRpcSync(regmsg.toChunkedByteBuffer(), TIMEOUT_MS);
 
       // Make a successful request to fetch blocks, which creates a new stream. But do not actually
       // fetch any blocks, to keep the stream open.

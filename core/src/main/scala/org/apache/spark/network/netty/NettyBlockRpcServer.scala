@@ -70,7 +70,7 @@ class NettyBlockRpcServer(
             .deserialize(ChunkedByteBuffer.wrap(uploadBlock.metadata))
             .asInstanceOf[(StorageLevel, ClassTag[_])]
         }
-        val data = new NioManagedBuffer(ByteBuffer.wrap(uploadBlock.blockData))
+        val data = new NioManagedBuffer(uploadBlock.blockData)
         val blockId = BlockId(uploadBlock.blockId)
         blockManager.putBlockData(blockId, data, level, classTag)
         responseContext.onSuccess(ChunkedByteBuffer.allocate(0))

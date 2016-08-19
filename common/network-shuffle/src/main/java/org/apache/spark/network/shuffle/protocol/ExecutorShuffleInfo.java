@@ -17,6 +17,9 @@
 
 package org.apache.spark.network.shuffle.protocol;
 
+import java.io.DataInput;
+import java.io.DataOutput;
+import java.io.IOException;
 import java.util.Arrays;
 
 import com.fasterxml.jackson.annotation.JsonCreator;
@@ -85,7 +88,20 @@ public class ExecutorShuffleInfo implements Encodable {
     Encoders.Strings.encode(buf, shuffleManager);
   }
 
+  public void encode(DataOutput buf) throws IOException {
+    Encoders.StringArrays.encode(buf, localDirs);
+    buf.writeInt(subDirsPerLocalDir);
+    Encoders.Strings.encode(buf, shuffleManager);
+  }
+
   public static ExecutorShuffleInfo decode(ByteBuf buf) {
+    String[] localDirs = Encoders.StringArrays.decode(buf);
+    int subDirsPerLocalDir = buf.readInt();
+    String shuffleManager = Encoders.Strings.decode(buf);
+    return new ExecutorShuffleInfo(localDirs, subDirsPerLocalDir, shuffleManager);
+  }
+
+  public static ExecutorShuffleInfo decode(DataInput buf) throws IOException {
     String[] localDirs = Encoders.StringArrays.decode(buf);
     int subDirsPerLocalDir = buf.readInt();
     String shuffleManager = Encoders.Strings.decode(buf);
