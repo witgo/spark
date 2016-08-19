@@ -17,15 +17,17 @@
 
 package org.apache.spark.network.buffer;
 
-import io.netty.util.AbstractReferenceCounted;
-import io.netty.util.IllegalReferenceCountException;
-
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.ByteBuffer;
 
+import io.netty.util.AbstractReferenceCounted;
+import io.netty.util.IllegalReferenceCountException;
+
+import org.apache.spark.network.util.LimitedInputStream;
+
 public class InputStreamManagedBuffer extends ManagedBuffer {
-  private final InputStream inputStream;
+  private final LimitedInputStream inputStream;
   private final long byteCount;
 
   private final AbstractReferenceCounted referenceCounter = new AbstractReferenceCounted() {
@@ -39,8 +41,12 @@ public class InputStreamManagedBuffer extends ManagedBuffer {
     }
   };
 
-  public InputStreamManagedBuffer(InputStream inputStream, long byteCount) {
-    this.inputStream = inputStream;
+  public InputStreamManagedBuffer(InputStream in, long byteCount) {
+    this(in, byteCount, true);
+  }
+
+  public InputStreamManagedBuffer(InputStream in, long byteCount, boolean closeWrappedStream) {
+    this.inputStream = new LimitedInputStream(in, byteCount, closeWrappedStream);
     this.byteCount = byteCount;
   }
 
