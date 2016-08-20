@@ -17,82 +17,136 @@
 
 package org.apache.spark.network.protocol;
 
-import java.io.DataInput;
-import java.io.DataOutput;
+import java.io.EOFException;
+import java.io.InputStream;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 
-import io.netty.buffer.ByteBuf;
+import com.google.common.io.ByteStreams;
 
 /** Provides a canonical set of Encoders for simple types. */
 public class Encoders {
 
-  /** Strings are encoded with their length followed by UTF-8 bytes. */
+  public static class Longs {
+    public static int encodedLength(long l) {
+      return 8;
+    }
+
+    public static void encode(OutputStream out, long l) throws IOException {
+      byte[] bytes = com.google.common.primitives.Longs.toByteArray(l);
+      out.write(bytes);
+    }
+
+    public static long decode(InputStream in) throws IOException {
+      byte[] bytes = new byte[8];
+      ByteStreams.readFully(in, bytes);
+      return com.google.common.primitives.Longs.fromByteArray(bytes);
+    }
+
+  }
+
+  public static class Doubles {
+    public static int encodedLength(long l) {
+      return 8;
+    }
+
+    public static void encode(OutputStream buf, double d) throws IOException {
+      long l = java.lang.Double.doubleToLongBits(d);
+      Longs.encode(buf, l);
+    }
+
+    public static double decode(InputStream buf) throws IOException {
+      byte[] bytes = new byte[8];
+      ByteStreams.readFully(buf, bytes);
+      long l = com.google.common.primitives.Longs.fromByteArray(bytes);
+      return Double.longBitsToDouble(l);
+    }
+  }
+
+  public static class Ints {
+    public static int encodedLength(int i) {
+      return 4;
+    }
+
+    public static void encode(OutputStream buf, int i) throws IOException {
+      byte[] bytes = com.google.common.primitives.Ints.toByteArray(i);
+      buf.write(bytes);
+    }
+
+    public static int decode(InputStream buf) throws IOException {
+      byte[] bytes = new byte[4];
+      ByteStreams.readFully(buf, bytes);
+      return com.google.common.primitives.Ints.fromByteArray(bytes);
+    }
+  }
+
+  /**
+   * Strings are encoded with their length followed by UTF-8 bytes.
+   */
   public static class Strings {
     public static int encodedLength(String s) {
       return 4 + s.getBytes(StandardCharsets.UTF_8).length;
     }
 
-    public static void encode(ByteBuf buf, String s) {
+    public static void encode(OutputStream buf, String s) throws IOException {
       byte[] bytes = s.getBytes(StandardCharsets.UTF_8);
-      buf.writeInt(bytes.length);
-      buf.writeBytes(bytes);
-    }
-
-    public static void encode(DataOutput buf, String s) throws IOException {
-      byte[] bytes = s.getBytes(StandardCharsets.UTF_8);
-      buf.writeInt(bytes.length);
+      Ints.encode(buf, bytes.length);
       buf.write(bytes);
     }
 
-    public static String decode(ByteBuf buf) {
-      int length = buf.readInt();
+    public static String decode(InputStream buf) throws IOException {
+      int length = Ints.decode(buf);
       byte[] bytes = new byte[length];
-      buf.readBytes(bytes);
-      return new String(bytes, StandardCharsets.UTF_8);
-    }
-
-    public static String decode(DataInput buf) throws IOException {
-      int length = buf.readInt();
-      byte[] bytes = new byte[length];
-      buf.readFully(bytes);
+      ByteStreams.readFully(buf, bytes);
       return new String(bytes, StandardCharsets.UTF_8);
     }
   }
 
-  /** Byte arrays are encoded with their length followed by bytes. */
+  /**
+   * Byte is encoded with their length followed by bytes.
+   */
+  public static class Bytes {
+    public static int encodedLength(byte arr) {
+      return 1;
+    }
+
+    public static void encode(OutputStream buf, byte arr) throws IOException {
+      buf.write(arr);
+    }
+
+    public static byte decode(InputStream in) throws IOException {
+      int ch = in.read();
+      if (ch < 0)
+        throw new EOFException();
+      return (byte) (ch);
+    }
+  }
+
+  /**
+   * Byte arrays are encoded with their length followed by bytes.
+   */
   public static class ByteArrays {
     public static int encodedLength(byte[] arr) {
       return 4 + arr.length;
     }
 
-    public static void encode(ByteBuf buf, byte[] arr) {
-      buf.writeInt(arr.length);
-      buf.writeBytes(arr);
-    }
-
-    public static void encode(DataOutput buf, byte[] arr) throws IOException {
-      buf.writeInt(arr.length);
+    public static void encode(OutputStream buf, byte[] arr) throws IOException {
+      Ints.encode(buf, arr.length);
       buf.write(arr);
     }
 
-    public static byte[] decode(ByteBuf buf) {
-      int length = buf.readInt();
+    public static byte[] decode(InputStream buf) throws IOException {
+      int length = Ints.decode(buf);
       byte[] bytes = new byte[length];
-      buf.readBytes(bytes);
-      return bytes;
-    }
-
-    public static byte[] decode(DataInput buf) throws IOException {
-      int length = buf.readInt();
-      byte[] bytes = new byte[length];
-      buf.readFully(bytes);
+      ByteStreams.readFully(buf, bytes);
       return bytes;
     }
   }
 
-  /** String arrays are encoded with the number of strings followed by per-String encoding. */
+  /**
+   * String arrays are encoded with the number of strings followed by per-String encoding.
+   */
   public static class StringArrays {
     public static int encodedLength(String[] strings) {
       int totalLength = 4;
@@ -102,31 +156,15 @@ public class Encoders {
       return totalLength;
     }
 
-    public static void encode(ByteBuf buf, String[] strings) {
-      buf.writeInt(strings.length);
+    public static void encode(OutputStream buf, String[] strings) throws IOException {
+      Ints.encode(buf, strings.length);
       for (String s : strings) {
         Strings.encode(buf, s);
       }
     }
 
-    public static void encode(DataOutput buf, String[] strings) throws IOException {
-      buf.writeInt(strings.length);
-      for (String s : strings) {
-        Strings.encode(buf, s);
-      }
-    }
-
-    public static String[] decode(ByteBuf buf) {
-      int numStrings = buf.readInt();
-      String[] strings = new String[numStrings];
-      for (int i = 0; i < strings.length; i ++) {
-        strings[i] = Strings.decode(buf);
-      }
-      return strings;
-    }
-
-    public static String[] decode(DataInput buf) throws IOException {
-      int numStrings = buf.readInt();
+    public static String[] decode(InputStream buf) throws IOException {
+      int numStrings = Ints.decode(buf);
       String[] strings = new String[numStrings];
       for (int i = 0; i < strings.length; i++) {
         strings[i] = Strings.decode(buf);

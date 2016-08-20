@@ -17,7 +17,6 @@
 
 package org.apache.spark.network.shuffle;
 
-import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.util.Iterator;
 
@@ -60,13 +59,13 @@ public class ExternalShuffleBlockHandlerSuite {
   }
 
   @Test
-  public void testRegisterExecutor() {
+  public void testRegisterExecutor() throws Exception {
     RpcResponseCallback callback = mock(RpcResponseCallback.class);
 
     ExecutorShuffleInfo config = new ExecutorShuffleInfo(new String[] {"/a", "/b"}, 16, "sort");
     ChunkedByteBuffer registerMessage = new RegisterExecutor("app0", "exec1", config).
         toChunkedByteBuffer();
-    handler.receive(client, registerMessage, callback);
+    handler.receive(client, registerMessage.toInputStream(), callback);
     verify(blockResolver, times(1)).registerExecutor("app0", "exec1", config);
 
     verify(callback, times(1)).onSuccess(any(ChunkedByteBuffer.class));
@@ -81,7 +80,7 @@ public class ExternalShuffleBlockHandlerSuite {
 
   @SuppressWarnings("unchecked")
   @Test
-  public void testOpenShuffleBlocks() throws IOException {
+  public void testOpenShuffleBlocks() throws Exception {
     RpcResponseCallback callback = mock(RpcResponseCallback.class);
 
     ManagedBuffer block0Marker = new NioManagedBuffer(ByteBuffer.wrap(new byte[3]));
@@ -90,7 +89,7 @@ public class ExternalShuffleBlockHandlerSuite {
     when(blockResolver.getBlockData("app0", "exec1", "b1")).thenReturn(block1Marker);
     ChunkedByteBuffer openBlocks = new OpenBlocks("app0", "exec1", new String[] { "b0", "b1" })
       .toChunkedByteBuffer();
-    handler.receive(client, openBlocks, callback);
+    handler.receive(client, openBlocks.toInputStream(), callback);
     verify(blockResolver, times(1)).getBlockData("app0", "exec1", "b0");
     verify(blockResolver, times(1)).getBlockData("app0", "exec1", "b1");
 
@@ -126,12 +125,12 @@ public class ExternalShuffleBlockHandlerSuite {
   }
 
   @Test
-  public void testBadMessages() throws IOException {
+  public void testBadMessages() throws Exception {
     RpcResponseCallback callback = mock(RpcResponseCallback.class);
 
     ChunkedByteBuffer unserializableMsg =ChunkedByteBuffer.wrap(new byte[] { 0x12, 0x34, 0x56 });
     try {
-      handler.receive(client, unserializableMsg, callback);
+      handler.receive(client, unserializableMsg.toInputStream(), callback);
       fail("Should have thrown");
     } catch (Exception e) {
       // pass
@@ -140,7 +139,7 @@ public class ExternalShuffleBlockHandlerSuite {
     ChunkedByteBuffer unexpectedMsg = new UploadBlock("a", "e", "b", new byte[1],
         ChunkedByteBuffer.wrap(new byte[2])).toChunkedByteBuffer();
     try {
-      handler.receive(client, unexpectedMsg, callback);
+      handler.receive(client, unexpectedMsg.toInputStream(), callback);
       fail("Should have thrown");
     } catch (UnsupportedOperationException e) {
       // pass

@@ -18,6 +18,7 @@
 package org.apache.spark.network.sasl;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.ByteBuffer;
 import java.util.Arrays;
 import java.util.concurrent.CountDownLatch;
@@ -279,8 +280,10 @@ public class SaslIntegrationSuite {
   /** RPC handler which simply responds with the message it received. */
   public static class TestRpcHandler extends RpcHandler {
     @Override
-    public void receive(TransportClient client, ChunkedByteBuffer message, RpcResponseCallback callback) {
-      callback.onSuccess(message);
+    public void receive(
+        TransportClient client, InputStream message, RpcResponseCallback callback)
+        throws Exception {
+      callback.onSuccess(ChunkedByteBuffer.wrap(message, 32 * 1024));
     }
 
     @Override

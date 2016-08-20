@@ -17,8 +17,7 @@
 
 package org.apache.spark.network;
 
-import java.io.IOException;
-import java.nio.ByteBuffer;
+import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
@@ -53,6 +52,10 @@ public class RpcIntegrationSuite {
   static RpcHandler rpcHandler;
   static List<String> oneWayMsgs;
 
+  private static String inputStreamToString(InputStream in) throws Exception {
+    return JavaUtils.bytesToString(ChunkedByteBuffer.wrap(in, 1024).toByteBuffer());
+  }
+
   @BeforeClass
   public static void setUp() throws Exception {
     TransportConf conf = new TransportConf("shuffle", new SystemPropertyConfigProvider());
@@ -60,9 +63,9 @@ public class RpcIntegrationSuite {
       @Override
       public void receive(
           TransportClient client,
-          ChunkedByteBuffer message,
-          RpcResponseCallback callback) {
-        String msg = JavaUtils.bytesToString(message.toByteBuffer());
+          InputStream message,
+          RpcResponseCallback callback) throws Exception {
+        String msg = inputStreamToString(message);
         String[] parts = msg.split("/");
         if (parts[0].equals("hello")) {
           callback.onSuccess(ChunkedByteBuffer.wrap(
@@ -75,8 +78,8 @@ public class RpcIntegrationSuite {
       }
 
       @Override
-      public void receive(TransportClient client, ChunkedByteBuffer message) {
-        String msg = JavaUtils.bytesToString(message.toByteBuffer());
+      public void receive(TransportClient client, InputStream message) throws Exception {
+        String msg = inputStreamToString(message);
         oneWayMsgs.add(msg);
       }
 

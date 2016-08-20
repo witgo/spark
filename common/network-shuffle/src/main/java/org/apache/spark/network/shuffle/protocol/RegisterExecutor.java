@@ -17,16 +17,16 @@
 
 package org.apache.spark.network.shuffle.protocol;
 
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+
 import com.google.common.base.Objects;
 import io.netty.buffer.ByteBuf;
 
 import org.apache.spark.network.protocol.Encoders;
 
 // Needed by ScalaDoc. See SPARK-7726
-import java.io.DataInput;
-import java.io.DataOutput;
-import java.io.IOException;
-
 import static org.apache.spark.network.shuffle.protocol.BlockTransferMessage.Type;
 
 /**
@@ -83,13 +83,13 @@ public class RegisterExecutor extends BlockTransferMessage {
   }
 
   @Override
-  public void encode(DataOutput buf) throws IOException {
+  public void encode(OutputStream buf) throws IOException {
     Encoders.Strings.encode(buf, appId);
     Encoders.Strings.encode(buf, execId);
     executorInfo.encode(buf);
   }
 
-  public static RegisterExecutor decode(DataInput buf) throws IOException {
+  public static RegisterExecutor decode(InputStream buf) throws IOException {
     String appId = Encoders.Strings.decode(buf);
     String execId = Encoders.Strings.decode(buf);
     ExecutorShuffleInfo executorShuffleInfo = ExecutorShuffleInfo.decode(buf);

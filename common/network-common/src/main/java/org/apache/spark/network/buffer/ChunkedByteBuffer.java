@@ -25,6 +25,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 
 import com.google.common.base.Objects;
+import com.google.common.io.ByteStreams;
 import sun.nio.ch.DirectBuffer;
 import com.google.common.base.Preconditions;
 import io.netty.buffer.ByteBuf;
@@ -341,5 +342,12 @@ public class ChunkedByteBuffer implements Externalizable {
       len -= bufLen;
     }
     return wrap(chunks);
+  }
+
+  public static ChunkedByteBuffer wrap(InputStream in, int chunkSize) throws IOException {
+    ChunkedByteBufferOutputStream out = new ChunkedByteBufferOutputStream(chunkSize);
+    ByteStreams.copy(in, out);
+    out.close();
+    return out.toChunkedByteBuffer();
   }
 }

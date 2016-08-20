@@ -102,43 +102,35 @@ public class UploadBlock extends BlockTransferMessage {
   }
 
   @Override
-  public void encode(DataOutput out) throws IOException {
+  public void encode(OutputStream out) throws IOException {
     Encoders.Strings.encode(out, appId);
     Encoders.Strings.encode(out, execId);
     Encoders.Strings.encode(out, blockId);
     Encoders.ByteArrays.encode(out, metadata);
-    out.writeLong(blockData.size());
-    copy(blockData.toInputStream(), out, blockData.size());
+    long bl = blockData.size();
+    Encoders.Longs.encode(out, bl);
+    copy(blockData.toInputStream(), out, bl);
   }
 
-  public static UploadBlock decode(DataInput in) throws IOException {
+  public static UploadBlock decode(InputStream in) throws IOException {
     String appId = Encoders.Strings.decode(in);
     String execId = Encoders.Strings.decode(in);
     String blockId = Encoders.Strings.decode(in);
-    byte[] metadata =  Encoders.ByteArrays.decode(in);
-    ChunkedByteBufferOutputStream blockData = new ChunkedByteBufferOutputStream(4 * 1024);
-    copy(in, blockData, in.readLong());
+    byte[] metadata = Encoders.ByteArrays.decode(in);
+    long bl = Encoders.Longs.decode(in);
+    ChunkedByteBufferOutputStream blockData = new ChunkedByteBufferOutputStream(32 * 1024);
+    copy(in, blockData, bl);
     return new UploadBlock(appId, execId, blockId,
         metadata, blockData.toChunkedByteBuffer());
   }
 
   private static int BUF_SIZE = 4 * 1024;
 
-  public static void copy(InputStream from, DataOutput to, long total) throws IOException {
+  public static void copy(InputStream from, OutputStream to, long total) throws IOException {
     byte[] buf = new byte[BUF_SIZE];
     while (total > 0) {
       int len = (int) Math.min(BUF_SIZE, total);
       ByteStreams.readFully(from, buf, 0, len);
-      to.write(buf, 0, len);
-      total -= len;
-    }
-  }
-
-  public static void copy(DataInput from, OutputStream to, long total) throws IOException {
-    byte[] buf = new byte[BUF_SIZE];
-    while (total > 0) {
-      int len = (int) Math.min(BUF_SIZE, total);
-      from.readFully(buf, 0, len);
       to.write(buf, 0, len);
       total -= len;
     }

@@ -17,9 +17,9 @@
 
 package org.apache.spark.network.shuffle.protocol.mesos;
 
-import java.io.DataInput;
-import java.io.DataOutput;
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
 
 import com.google.common.base.Objects;
 
@@ -54,9 +54,9 @@ public class RegisterDriver extends BlockTransferMessage {
   }
 
   @Override
-  public void encode(DataOutput output) throws IOException {
+  public void encode(OutputStream output) throws IOException {
     Encoders.Strings.encode(output, appId);
-    output.writeLong(heartbeatTimeoutMs);
+    Encoders.Longs.encode(output, heartbeatTimeoutMs);
   }
 
   @Override
@@ -72,9 +72,9 @@ public class RegisterDriver extends BlockTransferMessage {
     return Objects.equal(appId, ((RegisterDriver) o).appId);
   }
 
-  public static RegisterDriver decode(DataInput buf) throws IOException {
-    String appId = Encoders.Strings.decode(buf);
-    long heartbeatTimeout = buf.readLong();
+  public static RegisterDriver decode(InputStream in) throws IOException {
+    String appId = Encoders.Strings.decode(in);
+    long heartbeatTimeout = Encoders.Longs.decode(in);
     return new RegisterDriver(appId, heartbeatTimeout);
   }
 }

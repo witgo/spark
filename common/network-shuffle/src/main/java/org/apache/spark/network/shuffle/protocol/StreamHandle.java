@@ -17,12 +17,13 @@
 
 package org.apache.spark.network.shuffle.protocol;
 
-import java.io.DataInput;
-import java.io.DataOutput;
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
 
 import com.google.common.base.Objects;
 
+import org.apache.spark.network.protocol.Encoders;
 // Needed by ScalaDoc. See SPARK-7726
 import static org.apache.spark.network.shuffle.protocol.BlockTransferMessage.Type;
 
@@ -71,14 +72,14 @@ public class StreamHandle extends BlockTransferMessage {
   }
 
   @Override
-  public void encode(DataOutput buf) throws IOException {
-    buf.writeLong(streamId);
-    buf.writeInt(numChunks);
+  public void encode(OutputStream out) throws IOException {
+    Encoders.Longs.encode(out, streamId);
+    Encoders.Ints.encode(out, numChunks);
   }
 
-  public static StreamHandle decode(DataInput buf) throws IOException {
-    long streamId = buf.readLong();
-    int numChunks = buf.readInt();
+  public static StreamHandle decode(InputStream in) throws IOException {
+    long streamId = Encoders.Longs.decode(in);
+    int numChunks = Encoders.Ints.decode(in);
     return new StreamHandle(streamId, numChunks);
   }
 }

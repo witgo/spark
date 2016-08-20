@@ -20,6 +20,7 @@ package org.apache.spark.network.buffer;
 import java.io.IOException;
 import java.io.InputStream;
 
+import com.google.common.base.Preconditions;
 import io.netty.util.AbstractReferenceCounted;
 import io.netty.util.IllegalReferenceCountException;
 
@@ -34,6 +35,7 @@ public class InputStreamManagedBuffer extends ManagedBuffer {
     @Override
     protected void deallocate() {
       try {
+        buffer = null;
         inputStream.close();
       } catch (Throwable e) {
         throw new RuntimeException(e);
@@ -55,27 +57,41 @@ public class InputStreamManagedBuffer extends ManagedBuffer {
   }
 
   public ChunkedByteBuffer nioByteBuffer() throws IOException {
+    ensureAccessible();
+    if (hasRead) return buffer;
     hasRead = true;
-    ChunkedByteBuffer buffer = ChunkedByteBuffer.wrap(inputStream, 32 * 1024);
+    buffer = ChunkedByteBuffer.wrap(inputStream, 32 * 1024);
     return buffer;
   }
 
   public InputStream createInputStream() throws IOException {
-    if (referenceCounter.refCnt() == 0) throw new IllegalReferenceCountException(0);
+    ensureAccessible();
+    Preconditions.checkState(!hasRead, "nioByteBuffer has been called!");
     return inputStream;
   }
 
   public ManagedBuffer retain() {
+    ensureAccessible();
     referenceCounter.retain();
     return this;
   }
 
   public ManagedBuffer release() {
+    ensureAccessible();
     referenceCounter.release();
     return this;
   }
 
   public Object convertToNetty() throws IOException {
+    ensureAccessible();
     throw new UnsupportedOperationException("convertToNetty");
+  }
+
+  /**
+   * Should be called by every method that tries to access the buffers content to check
+   * if the buffer was released before.
+   */
+  protected final void ensureAccessible() {
+    if (referenceCounter.refCnt() == 0) throw new IllegalReferenceCountException(0);
   }
 }

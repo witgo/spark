@@ -21,8 +21,8 @@ import static org.junit.Assert.*;
 import static org.mockito.Mockito.*;
 
 import java.io.File;
+import java.io.InputStream;
 import java.lang.reflect.Method;
-import java.nio.ByteBuffer;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Random;
@@ -148,7 +148,7 @@ public class SparkSaslSuite {
         }
       })
       .when(rpcHandler)
-      .receive(any(TransportClient.class), any(ChunkedByteBuffer.class), any(RpcResponseCallback.class));
+      .receive(any(TransportClient.class), any(InputStream.class), any(RpcResponseCallback.class));
 
     SaslTestCtx ctx = new SaslTestCtx(rpcHandler, encrypt, false);
     try {
