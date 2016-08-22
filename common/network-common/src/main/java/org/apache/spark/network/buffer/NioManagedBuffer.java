@@ -22,9 +22,6 @@ import java.io.InputStream;
 import java.nio.ByteBuffer;
 
 import com.google.common.base.Objects;
-import io.netty.buffer.ByteBuf;
-import io.netty.buffer.ByteBufInputStream;
-import io.netty.buffer.Unpooled;
 
 /**
  * A {@link ManagedBuffer} backed by {@link ByteBuffer}.
@@ -67,13 +64,8 @@ public class NioManagedBuffer extends ManagedBuffer {
 
   @Override
   public Object convertToNetty() throws IOException {
-    if (size() > Integer.MAX_VALUE) {
-      ByteBuffer[] buffers = buf.getChunks();
-      ByteBuf[] bufs = new ByteBuf[buffers.length];
-      for (int i = 0; i < buffers.length; i++) {
-        bufs[i] = Unpooled.wrappedBuffer(buffers[i]);
-      }
-      return bufs;
+    if (size() > Integer.MAX_VALUE - 1024 * 1024) {
+      return buf.toInputStream();
     } else {
       return buf.toNetty();
     }
