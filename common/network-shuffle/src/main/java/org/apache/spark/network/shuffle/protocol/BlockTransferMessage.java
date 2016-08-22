@@ -19,10 +19,13 @@ package org.apache.spark.network.shuffle.protocol;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.OutputStream;
+
 
 import org.apache.spark.network.buffer.ChunkedByteBuffer;
 import org.apache.spark.network.buffer.ChunkedByteBufferOutputStream;
 import org.apache.spark.network.protocol.Encodable;
+
 import org.apache.spark.network.protocol.Encoders;
 import org.apache.spark.network.shuffle.protocol.mesos.RegisterDriver;
 import org.apache.spark.network.shuffle.protocol.mesos.ShuffleServiceHeartbeat;
@@ -37,8 +40,17 @@ import org.apache.spark.network.shuffle.protocol.mesos.ShuffleServiceHeartbeat;
  *   - UploadBlock is only handled by the NettyBlockTransferService.
  *   - RegisterExecutor is only handled by the external shuffle service.
  */
-public abstract class BlockTransferMessage implements Encodable {
+public abstract class BlockTransferMessage {
   protected abstract Type type();
+
+  /** Number of bytes of the encoded form of this object. */
+  public abstract long encodedLength();
+
+  /**
+   * Serializes this object by writing into the given ByteBuf.
+   * This method must write exactly encodedLength() bytes.
+   */
+  public abstract void encode(OutputStream output) throws IOException;
 
   /** Preceding every serialized message is its type, which allows us to deserialize it. */
   public enum Type {

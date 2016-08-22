@@ -130,7 +130,7 @@ public class TransportFrameDecoder extends ChannelInboundHandlerAdapter {
     nextFrameSize = UNKNOWN_FRAME_SIZE;
 
     Preconditions.checkArgument(frameSize > 0, "Frame length should be positive: %s", frameSize);
-    
+
     LinkedList<ByteBuf> frame = new LinkedList<>();
     // If the first buffer holds the entire frame, return it.
     long remaining = frameSize;
