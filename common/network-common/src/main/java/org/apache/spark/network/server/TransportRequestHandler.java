@@ -156,7 +156,7 @@ public class TransportRequestHandler extends MessageHandler<RequestMessage> {
 
   private void processRpcRequest(final RpcRequest req) {
     try {
-      rpcHandler.receive(reverseClient, req.body().nioByteBuffer(), new RpcResponseCallback() {
+      rpcHandler.receive(reverseClient, req.body().createInputStream(), new RpcResponseCallback() {
         @Override
         public void onSuccess(ChunkedByteBuffer response) {
           respond(new RpcResponse(req.requestId, new NioManagedBuffer(response)));
@@ -177,7 +177,7 @@ public class TransportRequestHandler extends MessageHandler<RequestMessage> {
 
   private void processOneWayMessage(OneWayMessage req) {
     try {
-      rpcHandler.receive(reverseClient, req.body().nioByteBuffer());
+      rpcHandler.receive(reverseClient, req.body().createInputStream());
     } catch (Exception e) {
       logger.error("Error while invoking RpcHandler#receive() for one-way message.", e);
     } finally {
