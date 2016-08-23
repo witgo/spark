@@ -44,7 +44,7 @@ public final class RpcRequest extends AbstractMessage implements RequestMessage 
   public Type type() { return Type.RpcRequest; }
 
   @Override
-  public int encodedLength() {
+  public long encodedLength() {
     // The integer (a.k.a. the body size) is not really used, since that information is already
     // encoded in the frame length. But this maintains backwards compatibility with versions of
     // RpcRequest that use Encoders.ByteArrays.

@@ -40,7 +40,7 @@ public final class StreamRequest extends AbstractMessage implements RequestMessa
   public Type type() { return Type.StreamRequest; }
 
   @Override
-  public int encodedLength() {
+  public long encodedLength() {
     return Encoders.Strings.encodedLength(streamId);
   }
 

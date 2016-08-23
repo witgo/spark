@@ -37,7 +37,7 @@ public final class ChunkFetchRequest extends AbstractMessage implements RequestM
   public Type type() { return Type.ChunkFetchRequest; }
 
   @Override
-  public int encodedLength() {
+  public long encodedLength() {
     return streamChunkId.encodedLength();
   }
 

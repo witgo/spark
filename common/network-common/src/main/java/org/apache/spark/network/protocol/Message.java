@@ -50,7 +50,7 @@ public interface Message extends Encodable {
 
     public byte id() { return id; }
 
-    @Override public int encodedLength() { return 1; }
+    @Override public long encodedLength() { return 1; }
 
     @Override
     public void encode(OutputStream buf) throws IOException {

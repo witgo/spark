@@ -36,7 +36,7 @@ public final class StreamChunkId implements Encodable {
   }
 
   @Override
-  public int encodedLength() {
+  public long encodedLength() {
     return 8 + 4;
   }
 

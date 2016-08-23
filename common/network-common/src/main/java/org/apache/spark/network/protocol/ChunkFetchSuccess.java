@@ -46,7 +46,7 @@ public final class ChunkFetchSuccess extends AbstractResponseMessage {
   public Type type() { return Type.ChunkFetchSuccess; }
 
   @Override
-  public int encodedLength() {
+  public long encodedLength() {
     return streamChunkId.encodedLength() + 8;
   }
 
