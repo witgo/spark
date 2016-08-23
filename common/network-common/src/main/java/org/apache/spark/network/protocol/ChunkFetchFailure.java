@@ -39,7 +39,7 @@ public final class ChunkFetchFailure extends AbstractMessage implements Response
   public Type type() { return Type.ChunkFetchFailure; }
 
   @Override
-  public int encodedLength() {
+  public long encodedLength() {
     return streamChunkId.encodedLength() + Encoders.Strings.encodedLength(errorString);
   }
 

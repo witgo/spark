@@ -39,7 +39,7 @@ public final class StreamFailure extends AbstractMessage implements ResponseMess
   public Type type() { return Type.StreamFailure; }
 
   @Override
-  public int encodedLength() {
+  public long encodedLength() {
     return Encoders.Strings.encodedLength(streamId) + Encoders.Strings.encodedLength(error);
   }
 

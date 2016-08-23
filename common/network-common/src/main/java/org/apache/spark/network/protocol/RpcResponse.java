@@ -39,7 +39,7 @@ public final class RpcResponse extends AbstractResponseMessage {
   public Type type() { return Type.RpcResponse; }
 
   @Override
-  public int encodedLength() {
+  public long encodedLength() {
     return 8 + 8;
   }
 

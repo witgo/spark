@@ -74,7 +74,7 @@ public class ExecutorShuffleInfo implements Encodable {
   }
 
   @Override
-  public int encodedLength() {
+  public long encodedLength() {
     return Encoders.StringArrays.encodedLength(localDirs)
         + 4 // int
         + Encoders.Strings.encodedLength(shuffleManager);

@@ -46,7 +46,7 @@ public final class StreamResponse extends AbstractResponseMessage {
   public Type type() { return Type.StreamResponse; }
 
   @Override
-  public int encodedLength() {
+  public long encodedLength() {
     return 8 + Encoders.Strings.encodedLength(streamId);
   }
 

@@ -33,7 +33,7 @@ import java.io.OutputStream;
  */
 public interface Encodable {
   /** Number of bytes of the encoded form of this object. */
-  int encodedLength();
+  long encodedLength();
 
   /**
    * Serializes this object by writing into the given ByteBuf.

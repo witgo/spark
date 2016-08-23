@@ -37,7 +37,7 @@ public final class RpcFailure extends AbstractMessage implements ResponseMessage
   public Type type() { return Type.RpcFailure; }
 
   @Override
-  public int encodedLength() {
+  public long encodedLength() {
     return 8 + Encoders.Strings.encodedLength(errorString);
   }
 

@@ -76,7 +76,7 @@ public final class MessageEncoder extends MessageToMessageEncoder<Message> {
     // All messages have the frame length, message type, and message itself. The frame length
     // may optionally include the length of the body data, depending on what message is being
     // sent.
-    int headerLength = 8 + msgType.encodedLength() + in.encodedLength();
+    long headerLength = 8 + msgType.encodedLength() + in.encodedLength();
     long frameLength = headerLength + (isBodyInFrame ? bodyLength : 0);
 
     ChunkedByteBufferOutputStream outputStream= new ChunkedByteBufferOutputStream(32 * 1024);
