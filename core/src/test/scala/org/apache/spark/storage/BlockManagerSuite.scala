@@ -1204,8 +1204,12 @@ class BlockManagerSuite extends SparkFunSuite with Matchers with BeforeAndAfterE
     store = makeBlockManager(8000, "executor1", mockBlockManagerMaster,
       transferService = Option(mockBlockTransferService))
     val block = store.getRemoteBytes("item")
-      .asInstanceOf[Option[ByteBuffer]]
+      .asInstanceOf[Option[ManagedBuffer]]
     assert(block.isDefined)
+    block.foreach { b =>
+      b.release()
+      assert(b.asInstanceOf[ReferenceCountedManagedBuffer].refCnt === 0)
+    }
     verify(mockBlockManagerMaster, times(2)).getLocations("item")
   }
 
