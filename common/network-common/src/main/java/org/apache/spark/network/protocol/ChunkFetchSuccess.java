@@ -36,10 +36,18 @@ import org.apache.spark.network.buffer.ManagedBuffer;
  */
 public final class ChunkFetchSuccess extends AbstractResponseMessage {
   public final StreamChunkId streamChunkId;
-
+  public final long byteCount;
+  public final static int MAX_FRAME_SIZE = 48 * 1024 * 1024;
   public ChunkFetchSuccess(StreamChunkId streamChunkId, ManagedBuffer buffer) {
-    super(buffer, true);
+    super(buffer, buffer.size() <= MAX_FRAME_SIZE);
     this.streamChunkId = streamChunkId;
+    this.byteCount = buffer.size();
+  }
+
+  public ChunkFetchSuccess(StreamChunkId streamChunkId, long byteCount, ManagedBuffer buffer) {
+    super(buffer, byteCount <= MAX_FRAME_SIZE);
+    this.streamChunkId = streamChunkId;
+    this.byteCount = byteCount;
   }
 
   @Override
@@ -65,9 +73,12 @@ public final class ChunkFetchSuccess extends AbstractResponseMessage {
   /** Decoding uses the given ByteBuf as our data, and will retain() it. */
   public static ChunkFetchSuccess decode(InputStream buf) throws IOException {
     StreamChunkId streamChunkId = StreamChunkId.decode(buf);
-    long limit = Encoders.Longs.decode(buf);
-    ManagedBuffer managedBuf = new InputStreamManagedBuffer(buf, limit);
-    return new ChunkFetchSuccess(streamChunkId, managedBuf);
+    long byteCount =  Encoders.Longs.decode(buf);
+    ManagedBuffer managedBuf = null;
+    if (byteCount <= MAX_FRAME_SIZE) {
+      managedBuf = new InputStreamManagedBuffer(buf, byteCount);
+    }
+    return new ChunkFetchSuccess(streamChunkId, byteCount, managedBuf);
   }
 
   @Override
