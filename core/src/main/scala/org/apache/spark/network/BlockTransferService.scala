@@ -99,19 +99,7 @@ abstract class BlockTransferService extends ShuffleClient with Closeable with Lo
           result.success(data.retain())
         }
       })
-    val data = ThreadUtils.awaitResult(result.future, Duration.Inf)
-    val dataSize = data.size()
-    val chunkSize = math.min(data.size(), 32 * 1024).toInt
-    val out = new ChunkedByteBufferOutputStream(chunkSize)
-    try {
-      Utils.copyStream(data.createInputStream(), out, closeStreams = true)
-      if (out.size() != dataSize) {
-        throw new SparkException(s"buffer size ${out.size()} but expected $dataSize")
-      }
-    } finally {
-      data.release()
-    }
-    new NioManagedBuffer(out.toChunkedByteBuffer)
+    ThreadUtils.awaitResult(result.future, Duration.Inf)
   }
 
   /**
