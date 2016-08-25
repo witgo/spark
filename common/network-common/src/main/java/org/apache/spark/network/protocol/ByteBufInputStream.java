@@ -27,14 +27,14 @@ import io.netty.buffer.ByteBuf;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-public class InputStreamByteBuf extends InputStream {
-  // private final Logger logger = LoggerFactory.getLogger(InputStreamByteBuf.class);
+public class ByteBufInputStream extends InputStream {
+  // private final Logger logger = LoggerFactory.getLogger(ByteBufInputStream.class);
 
   private final LinkedList<ByteBuf> buffers;
   private ByteBuf curChunk;
   private boolean isClosed = false;
 
-  public InputStreamByteBuf(LinkedList<ByteBuf> buffers) {
+  public ByteBufInputStream(LinkedList<ByteBuf> buffers) {
     this.buffers = buffers;
   }
 
