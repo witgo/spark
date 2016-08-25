@@ -73,17 +73,8 @@ public final class FileSegmentManagedBuffer extends ManagedBuffer {
       channel = new RandomAccessFile(file, "r").getChannel();
       // Just copy the buffer if it's sufficiently small, as memory mapping has a high overhead.
       if (length < memoryMapBytes) {
-        ByteBuffer buf = ByteBuffer.allocate((int) length);
-        channel.position(offset);
-        while (buf.remaining() != 0) {
-          if (channel.read(buf) == -1) {
-            throw new IOException(String.format("Reached EOF before filling buffer\n" +
-              "offset=%s\nfile=%s\nbuf.remaining=%s",
-              offset, file.getAbsoluteFile(), buf.remaining()));
-          }
-        }
-        buf.flip();
-        return  new ChunkedByteBuffer(buf);
+        ByteBuffer buf = loadData(channel, offset, length);
+        return ChunkedByteBuffer.wrap(buf);
       } else {
         int pageSize = 32 * 1024;
         int numPage = (int) Math.ceil((double) length / pageSize);
@@ -92,12 +83,11 @@ public final class FileSegmentManagedBuffer extends ManagedBuffer {
         long off = offset;
         for (int i = 0; i < buffers.length; i++) {
           long pageLen = Math.min(len, pageSize);
-          buffers[i] = channel.map(FileChannel.MapMode.READ_ONLY, off, pageLen);
+          buffers[i] = loadData(channel, off, pageLen);
           len -= pageLen;
           off += pageLen;
         }
         return new ChunkedByteBuffer(buffers);
-        // return channel.map(FileChannel.MapMode.READ_ONLY, offset, length);
       }
     } catch (IOException e) {
       try {
@@ -113,6 +103,21 @@ public final class FileSegmentManagedBuffer extends ManagedBuffer {
     } finally {
       JavaUtils.closeQuietly(channel);
     }
+  }
+
+  // Fix "java.io.IOException: error=12, Cannot allocate memory".
+  private ByteBuffer loadData(FileChannel channel, long offset, long length) throws IOException {
+    ByteBuffer buf = ByteBuffer.allocate((int) length);
+    channel.position(offset);
+    while (buf.remaining() != 0) {
+      if (channel.read(buf) == -1) {
+        throw new IOException(String.format("Reached EOF before filling buffer\n" +
+                "offset=%s\nfile=%s\nbuf.remaining=%s",
+            offset, file.getAbsoluteFile(), buf.remaining()));
+      }
+    }
+    buf.flip();
+    return buf;
   }
 
   @Override
