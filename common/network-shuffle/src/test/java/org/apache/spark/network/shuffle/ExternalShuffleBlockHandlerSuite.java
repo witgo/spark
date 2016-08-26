@@ -137,7 +137,7 @@ public class ExternalShuffleBlockHandlerSuite {
     }
 
     ChunkedByteBuffer unexpectedMsg = new UploadBlock("a", "e", "b", new byte[1],
-        ChunkedByteBuffer.wrap(new byte[2])).toChunkedByteBuffer();
+        new NioManagedBuffer(ChunkedByteBuffer.wrap(new byte[2]))).toChunkedByteBuffer();
     try {
       handler.receive(client, unexpectedMsg.toInputStream(), callback);
       fail("Should have thrown");

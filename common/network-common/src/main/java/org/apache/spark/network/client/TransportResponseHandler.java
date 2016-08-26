@@ -271,9 +271,14 @@ public class TransportResponseHandler extends MessageHandler<ResponseMessage> {
           public void onFailure(Throwable cause) throws IOException {
             listener.onFailure(resp.streamChunkId.chunkIndex, cause);
           }
+
+          @Override
+          public void deactivateStream() {
+            this.deactivateStream();
+          }
         };
     InputStreamInterceptor inputStream =
-        new InputStreamInterceptor(this, channel, resp.byteCount, callback);
+        new InputStreamInterceptor(channel, resp.byteCount, callback);
     try {
       TransportFrameDecoder frameDecoder = (TransportFrameDecoder)
           channel.pipeline().get(TransportFrameDecoder.HANDLER_NAME);

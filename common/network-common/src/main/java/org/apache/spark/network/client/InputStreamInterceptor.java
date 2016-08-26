@@ -19,17 +19,17 @@ package org.apache.spark.network.client;
 
 import java.io.IOException;
 import java.io.InputStream;
-import java.nio.ByteBuffer;
 import java.nio.channels.ClosedChannelException;
 import java.util.Iterator;
 import java.util.concurrent.LinkedBlockingQueue;
-import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.atomic.AtomicIntegerFieldUpdater;
+import java.util.concurrent.atomic.AtomicReferenceFieldUpdater;
 
 import com.google.common.primitives.UnsignedBytes;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.EmptyByteBuf;
 import io.netty.channel.Channel;
+import io.netty.util.internal.PlatformDependent;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -39,7 +39,6 @@ import org.apache.spark.network.util.TransportFrameDecoder;
 public class InputStreamInterceptor extends InputStream {
   private final Logger logger = LoggerFactory.getLogger(InputStreamInterceptor.class);
 
-  private final TransportResponseHandler handler;
   private final Channel channel;
   private final long byteCount;
   private final InputStreamCallback callback;
@@ -51,15 +50,33 @@ public class InputStreamInterceptor extends InputStream {
   private boolean isCallbacked = false;
   private long writerIndex = 0;
 
-  private final AtomicReference<Throwable> cause = new AtomicReference<>(null);
-  private final AtomicBoolean isClosed = new AtomicBoolean(false);
+  private volatile int closedInt = 0;
+  private volatile Throwable refCause = null;
+
+  private static final AtomicIntegerFieldUpdater<InputStreamInterceptor> closedUpdater;
+  private static final AtomicReferenceFieldUpdater<InputStreamInterceptor, Throwable> causeUpdater;
+
+  static {
+    AtomicIntegerFieldUpdater<InputStreamInterceptor> updater =
+        PlatformDependent.newAtomicIntegerFieldUpdater(InputStreamInterceptor.class, "closedInt");
+    if (updater == null) {
+      updater = AtomicIntegerFieldUpdater.newUpdater(InputStreamInterceptor.class, "closedInt");
+    }
+    closedUpdater = updater;
+    @SuppressWarnings({"rawtypes"})
+    AtomicReferenceFieldUpdater<InputStreamInterceptor, Throwable> throwUpdater =
+        PlatformDependent.newAtomicReferenceFieldUpdater(InputStreamInterceptor.class, "refCause");
+    if (throwUpdater == null) {
+      throwUpdater = AtomicReferenceFieldUpdater.newUpdater(InputStreamInterceptor.class,
+          Throwable.class, "refCause");
+    }
+    causeUpdater = throwUpdater;
+  }
 
   public InputStreamInterceptor(
-      TransportResponseHandler handler,
       Channel channel,
       long byteCount,
       InputStreamCallback callback) {
-    this.handler = handler;
     this.channel = channel;
     this.byteCount = byteCount;
     this.callback = callback;
@@ -69,7 +86,7 @@ public class InputStreamInterceptor extends InputStream {
 
   @Override
   public int read() throws IOException {
-    if (isClosed.get()) return -1;
+    if (isClosed()) return -1;
     pullChunk();
     if (curChunk != null) {
       byte b = curChunk.readByte();
@@ -82,7 +99,7 @@ public class InputStreamInterceptor extends InputStream {
 
   @Override
   public int read(byte[] dest, int offset, int length) throws IOException {
-    if (isClosed.get()) return -1;
+    if (isClosed()) return -1;
     pullChunk();
     if (curChunk != null) {
       int amountToGet = Math.min(curChunk.readableBytes(), length);
@@ -96,7 +113,7 @@ public class InputStreamInterceptor extends InputStream {
 
   @Override
   public long skip(long bytes) throws IOException {
-    if (isClosed.get()) return 0L;
+    if (isClosed()) return 0L;
     pullChunk();
     if (curChunk != null) {
       int amountToSkip = (int) Math.min(bytes, curChunk.readableBytes());
@@ -110,48 +127,58 @@ public class InputStreamInterceptor extends InputStream {
 
   @Override
   public void close() throws IOException {
-    if (!isClosed.get()) {
-      releaseCurChunk();
-      isClosed.set(true);
-      resetChannel();
-      Iterator<ByteBuf> itr = buffers.iterator();
-      while (itr.hasNext()) {
-        itr.next().release();
+    for (; ; ) {
+      if (closedUpdater.compareAndSet(this, 0, 1)) {
+        releaseCurChunk();
+        resetChannel();
+        Iterator<ByteBuf> itr = buffers.iterator();
+        while (itr.hasNext()) {
+          itr.next().release();
+        }
+        buffers.clear();
+        break;
       }
-      buffers.clear();
     }
   }
 
   private void pullChunk() throws IOException {
-    if (curChunk == null && cause.get() == null && !isClosed.get()) {
+    if (curChunk == null && cause() == null && !isClosed()) {
       try {
-        if (buffers.size() < 32 && !channel.config().isAutoRead()) {
+        if (!channel.config().isAutoRead()) {
           // if channel.read() will be not invoked automatically,
           // the method is called by here
-          channel.config().setAutoRead(true);
+          if (buffers.size() < 32) channel.config().setAutoRead(true);
           channel.read();
         }
+
         curChunk = buffers.take();
-        if (curChunk == emptyByteBuf) {
-          assert cause.get() != null;
-        }
+
+        if (curChunk == emptyByteBuf) assert cause() != null;
       } catch (Throwable e) {
         setCause(e);
       }
     }
-    if (cause.get() != null) throw new IOException(cause.get());
+    if (cause() != null) throw new IOException(cause());
+  }
+
+  private boolean isClosed() {
+    return closedInt == 1;
+  }
+
+  private Throwable cause() {
+    return refCause;
   }
 
   private void setCause(Throwable e) throws IOException {
-    if (cause.get() == null) {
+    if (causeUpdater.compareAndSet(this, null, e)) {
       try {
-        cause.set(e);
         close();
         buffers.put(emptyByteBuf);
       } catch (Throwable throwable) {
         // setCause(throwable);
       }
     }
+
   }
 
   private void maybeReleaseCurChunk() {
@@ -167,8 +194,8 @@ public class InputStreamInterceptor extends InputStream {
 
   private void onSuccess() throws IOException {
     if (isCallbacked) return;
-    if (cause.get() != null) {
-      callback.onFailure(cause.get());
+    if (cause() != null) {
+      callback.onFailure(cause());
     } else {
       callback.onSuccess(new LimitedInputStream(this, byteCount));
     }
@@ -185,7 +212,7 @@ public class InputStreamInterceptor extends InputStream {
   private class StreamInterceptor implements TransportFrameDecoder.Interceptor {
     @Override
     public void exceptionCaught(Throwable e) throws Exception {
-      handler.deactivateStream();
+      callback.deactivateStream();
       setCause(e);
       logger.trace("exceptionCaught", e);
       onSuccess();
@@ -194,9 +221,9 @@ public class InputStreamInterceptor extends InputStream {
 
     @Override
     public void channelInactive() throws Exception {
-      handler.deactivateStream();
+      callback.deactivateStream();
       setCause(new ClosedChannelException());
-      logger.trace("channelInactive", cause.get());
+      logger.trace("channelInactive", cause());
       onSuccess();
       resetChannel();
     }
@@ -208,14 +235,14 @@ public class InputStreamInterceptor extends InputStream {
         int available = frame.readableBytes();
         writerIndex += available;
         mayTrafficSuspension();
-        if (!isClosed.get() && available > 0) {
+        if (!isClosed() && available > 0) {
           buffers.put(frame);
           if (writerIndex > byteCount) {
             setCause(new IllegalStateException(String.format(
                 "Read too many bytes? Expected %d, but read %d.", byteCount, writerIndex)));
-            handler.deactivateStream();
+            callback.deactivateStream();
           } else if (writerIndex == byteCount) {
-            handler.deactivateStream();
+            callback.deactivateStream();
           }
         } else {
           frame.release();
@@ -259,7 +286,6 @@ public class InputStreamInterceptor extends InputStream {
   }
 
   public static interface InputStreamCallback {
-
     /**
      * Called when all data from the stream has been received.
      */
@@ -269,5 +295,24 @@ public class InputStreamInterceptor extends InputStream {
      * Called if there's an error reading data from the InputStream.
      */
     void onFailure(Throwable cause) throws IOException;
+
+    void deactivateStream();
   }
+
+  public static InputStreamCallback emptyInputStreamCallback = new InputStreamCallback() {
+    @Override
+    public void onSuccess(InputStream inputStream) throws IOException {
+
+    }
+
+    @Override
+    public void onFailure(Throwable cause) throws IOException {
+
+    }
+
+    @Override
+    public void deactivateStream() {
+
+    }
+  };
 }

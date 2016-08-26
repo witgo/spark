@@ -32,12 +32,19 @@ import org.apache.spark.network.buffer.ManagedBuffer;
  * {@link org.apache.spark.network.protocol.ResponseMessage} (either success or failure).
  */
 public final class RpcRequest extends AbstractMessage implements RequestMessage {
+  public final static long MAX_FRAME_SIZE = 1;
   /** Used to link an RPC request with its response. */
   public final long requestId;
+  public final long byteCount;
 
   public RpcRequest(long requestId, ManagedBuffer message) {
-    super(message, true);
+    this(requestId, message.size(), message);
+  }
+
+  public RpcRequest(long requestId, long byteCount, ManagedBuffer buffer) {
+    super(buffer, byteCount <= MAX_FRAME_SIZE);
     this.requestId = requestId;
+    this.byteCount = byteCount;
   }
 
   @Override
@@ -54,14 +61,17 @@ public final class RpcRequest extends AbstractMessage implements RequestMessage 
   @Override
   public void encode(OutputStream out) throws IOException {
     Encoders.Longs.encode(out, requestId);
-    Encoders.Longs.encode(out, body().size());
+    Encoders.Longs.encode(out, byteCount);
   }
 
   public static RpcRequest decode(InputStream in) throws IOException {
     long requestId = Encoders.Longs.decode(in);
-    long limit = Encoders.Longs.decode(in);
-    ManagedBuffer managedBuf = new InputStreamManagedBuffer(in, limit);
-    return new RpcRequest(requestId, managedBuf);
+    long byteCount =  Encoders.Longs.decode(in);
+    ManagedBuffer managedBuf = null;
+    if (byteCount <= MAX_FRAME_SIZE) {
+      managedBuf = new InputStreamManagedBuffer(in, byteCount);
+    }
+    return new RpcRequest(requestId, byteCount, managedBuf);
   }
 
   @Override

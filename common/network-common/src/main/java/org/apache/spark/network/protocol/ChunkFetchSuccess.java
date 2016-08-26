@@ -37,11 +37,10 @@ import org.apache.spark.network.buffer.ManagedBuffer;
 public final class ChunkFetchSuccess extends AbstractResponseMessage {
   public final StreamChunkId streamChunkId;
   public final long byteCount;
-  public final static int MAX_FRAME_SIZE = 48 * 1024 * 1024;
+  public final static long MAX_FRAME_SIZE = 48 * 1024 * 1024;
+
   public ChunkFetchSuccess(StreamChunkId streamChunkId, ManagedBuffer buffer) {
-    super(buffer, buffer.size() <= MAX_FRAME_SIZE);
-    this.streamChunkId = streamChunkId;
-    this.byteCount = buffer.size();
+    this(streamChunkId, buffer.size(), buffer);
   }
 
   public ChunkFetchSuccess(StreamChunkId streamChunkId, long byteCount, ManagedBuffer buffer) {

@@ -20,6 +20,7 @@ package org.apache.spark.network.shuffle.protocol;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.io.SequenceInputStream;
 import java.util.Arrays;
 
 import com.google.common.base.Objects;
@@ -27,11 +28,12 @@ import com.google.common.io.ByteStreams;
 
 import org.apache.spark.network.buffer.ChunkedByteBuffer;
 import org.apache.spark.network.buffer.ChunkedByteBufferOutputStream;
+import org.apache.spark.network.buffer.InputStreamManagedBuffer;
+import org.apache.spark.network.buffer.ManagedBuffer;
 import org.apache.spark.network.protocol.Encoders;
 
 // Needed by ScalaDoc. See SPARK-7726
 import static org.apache.spark.network.shuffle.protocol.BlockTransferMessage.Type;
-
 
 /** Request to upload a block with a certain StorageLevel. Returns nothing (empty byte array). */
 public class UploadBlock extends BlockTransferMessage {
@@ -41,7 +43,7 @@ public class UploadBlock extends BlockTransferMessage {
   // TODO: StorageLevel is serialized separately in here because StorageLevel is not available in
   // this package. We should avoid this hack.
   public final byte[] metadata;
-  public final ChunkedByteBuffer blockData;
+  public final ManagedBuffer blockData;
 
   /**
    * @param metadata Meta-information about block, typically StorageLevel.
@@ -52,7 +54,7 @@ public class UploadBlock extends BlockTransferMessage {
       String execId,
       String blockId,
       byte[] metadata,
-      ChunkedByteBuffer blockData) {
+      ManagedBuffer blockData) {
     this.appId = appId;
     this.execId = execId;
     this.blockId = blockId;
@@ -110,7 +112,26 @@ public class UploadBlock extends BlockTransferMessage {
     Encoders.ByteArrays.encode(out, metadata);
     long bl = blockData.size();
     Encoders.Longs.encode(out, bl);
-    copy(blockData.toInputStream(), out, bl);
+    copy(blockData.createInputStream(), out, bl);
+  }
+
+  private void encodeWithoutBlockData(OutputStream out) throws IOException {
+    Encoders.Strings.encode(out, appId);
+    Encoders.Strings.encode(out, execId);
+    Encoders.Strings.encode(out, blockId);
+    Encoders.ByteArrays.encode(out, metadata);
+    long bl = blockData.size();
+    Encoders.Longs.encode(out, bl);
+  }
+
+  public InputStream toInputStream() throws IOException {
+    ChunkedByteBufferOutputStream out = new ChunkedByteBufferOutputStream(4 * 1024);
+    // Allow room for encoded message, plus the type byte
+    Encoders.Bytes.encode(out, type().id());
+    encodeWithoutBlockData(out);
+    out.close();
+    return new SequenceInputStream(out.toChunkedByteBuffer().toInputStream(),
+        blockData.createInputStream());
   }
 
   public static UploadBlock decode(InputStream in) throws IOException {
@@ -119,10 +140,8 @@ public class UploadBlock extends BlockTransferMessage {
     String blockId = Encoders.Strings.decode(in);
     byte[] metadata = Encoders.ByteArrays.decode(in);
     long bl = Encoders.Longs.decode(in);
-    ChunkedByteBufferOutputStream blockData = new ChunkedByteBufferOutputStream(32 * 1024);
-    copy(in, blockData, bl);
-    return new UploadBlock(appId, execId, blockId,
-        metadata, blockData.toChunkedByteBuffer());
+    ManagedBuffer buffer = new InputStreamManagedBuffer(in, bl);
+    return new UploadBlock(appId, execId, blockId, metadata, buffer);
   }
 
   private static int BUF_SIZE = 4 * 1024;
