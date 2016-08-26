@@ -84,7 +84,11 @@ public class InputStreamManagedBuffer extends ManagedBuffer {
 
   public Object convertToNetty() throws IOException {
     ensureAccessible();
-    throw new UnsupportedOperationException("convertToNetty");
+    if (hasRead) {
+      return buffer;
+    } else {
+      return inputStream;
+    }
   }
 
   /**
