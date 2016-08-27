@@ -77,6 +77,7 @@ public class SaslClientBootstrap implements TransportClientBootstrap {
         SaslMessage msg = new SaslMessage(appId, payload);
         ChunkedByteBufferOutputStream outputStream= new ChunkedByteBufferOutputStream(32 * 1024);
         msg.encode(outputStream);
+        outputStream.write(msg.body().nioByteBuffer().toArray());
         outputStream.close();
         ChunkedByteBuffer response = client.sendRpcSync(outputStream.toChunkedByteBuffer(),
             conf.saslRTTimeoutMs());
