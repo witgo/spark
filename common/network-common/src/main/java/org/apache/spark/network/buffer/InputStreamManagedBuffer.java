@@ -44,7 +44,7 @@ public class InputStreamManagedBuffer extends ManagedBuffer {
   };
 
   public InputStreamManagedBuffer(InputStream in, long byteCount) {
-    this(in, byteCount, true);
+    this(in, byteCount, false);
   }
 
   public InputStreamManagedBuffer(InputStream in, long byteCount, boolean closeWrappedStream) {
