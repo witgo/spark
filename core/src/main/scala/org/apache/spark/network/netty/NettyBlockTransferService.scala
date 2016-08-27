@@ -127,8 +127,11 @@ private[spark] class NettyBlockTransferService(
     // Everything else is encoded using our binary protocol.
     val metadata = serializer.newInstance().serialize((level, classTag)).toArray
     val uploadBlock = new UploadBlock(appId, execId, blockId.toString, metadata, blockData)
-
-    client.sendRpc(uploadBlock.toInputStream, uploadBlock.encodedLength, new RpcResponseCallback {
+    val encodedLength = uploadBlock.encodedLength()
+    // val isBodyInFrame = encodedLength < 48 * 1024 * 1024
+    val isBodyInFrame = encodedLength < Int.MaxValue
+    val inputStream = uploadBlock.toInputStream
+    client.sendRpc(inputStream, encodedLength, isBodyInFrame, new RpcResponseCallback {
       override def onSuccess(response: ChunkedByteBuffer): Unit = {
         logTrace(s"Successfully uploaded block $blockId")
         result.success((): Unit)

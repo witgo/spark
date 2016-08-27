@@ -48,13 +48,42 @@ class NettyBlockRpcServer(
     blockManager: BlockDataManager)
   extends RpcHandler with Logging {
 
+  import NettyBlockRpcServer._
   private val streamManager = new OneForOneStreamManager()
 
   override def receive(
       client: TransportClient,
       rpcMessage: InputStream,
       responseContext: RpcResponseCallback): Unit = {
-    receivedMessages.offer(ReceiveMessage(client, rpcMessage, responseContext))
+    val toDo: () => Unit = () => {
+      val message = BlockTransferMessage.Decoder.fromDataInputStream(rpcMessage)
+      logTrace(s"Received request: $message")
+
+      message match {
+        case openBlocks: OpenBlocks =>
+          val blocks: Seq[ManagedBuffer] =
+            openBlocks.blockIds.map(BlockId.apply).map(blockManager.getBlockData)
+          val streamId = streamManager.registerStream(appId, blocks.iterator.asJava)
+          logTrace(s"Registered streamId $streamId with ${blocks.size} buffers")
+          val streamHandle = new StreamHandle(streamId, blocks.size)
+          responseContext.onSuccess(streamHandle.toChunkedByteBuffer)
+
+        case uploadBlock: UploadBlock =>
+          // StorageLevel and ClassTag are serialized as bytes using our JavaSerializer.
+          val (level: StorageLevel, classTag: ClassTag[_]) = {
+            serializer
+              .newInstance()
+              .deserialize(ChunkedByteBuffer.wrap(uploadBlock.metadata))
+              .asInstanceOf[(StorageLevel, ClassTag[_])]
+          }
+          val data = uploadBlock.blockData
+          val blockId = BlockId(uploadBlock.blockId)
+          blockManager.putBlockData(blockId, data, level, classTag)
+          responseContext.onSuccess(ChunkedByteBuffer.allocate(0))
+      }
+      Unit
+    }
+    receivedMessages.offer(ReceiveMessage(client, toDo))
   }
 
   override def channelInactive(client: TransportClient): Unit = {
@@ -72,9 +101,11 @@ class NettyBlockRpcServer(
 
   override def getStreamManager(): StreamManager = streamManager
 
+}
+
+object NettyBlockRpcServer extends Logging {
 
   private val receivedMessages = new LinkedBlockingQueue[ReceiveMessage]
-
 
   private val threadpool: ThreadPoolExecutor = {
     val numThreads = 2
@@ -85,9 +116,7 @@ class NettyBlockRpcServer(
     pool
   }
 
-  case class ReceiveMessage(client: TransportClient,
-    rpcMessage: InputStream,
-    responseContext: RpcResponseCallback)
+  case class ReceiveMessage(client: TransportClient, toDo: () => Unit)
 
   /** Message loop used for dispatching messages. */
   private class MessageLoop extends Runnable {
@@ -101,33 +130,7 @@ class NettyBlockRpcServer(
               receivedMessages.offer(PoisonPill)
               return
             }
-
-            val ReceiveMessage(client, rpcMessage, responseContext) = data
-            val message = BlockTransferMessage.Decoder.fromDataInputStream(rpcMessage)
-            logTrace(s"Received request: $message")
-
-            message match {
-              case openBlocks: OpenBlocks =>
-                val blocks: Seq[ManagedBuffer] =
-                  openBlocks.blockIds.map(BlockId.apply).map(blockManager.getBlockData)
-                val streamId = streamManager.registerStream(appId, blocks.iterator.asJava)
-                logTrace(s"Registered streamId $streamId with ${blocks.size} buffers")
-                val streamHandle = new StreamHandle(streamId, blocks.size)
-                responseContext.onSuccess(streamHandle.toChunkedByteBuffer)
-
-              case uploadBlock: UploadBlock =>
-                // StorageLevel and ClassTag are serialized as bytes using our JavaSerializer.
-                val (level: StorageLevel, classTag: ClassTag[_]) = {
-                  serializer
-                    .newInstance()
-                    .deserialize(ChunkedByteBuffer.wrap(uploadBlock.metadata))
-                    .asInstanceOf[(StorageLevel, ClassTag[_])]
-                }
-                val data = uploadBlock.blockData
-                val blockId = BlockId(uploadBlock.blockId)
-                blockManager.putBlockData(blockId, data, level, classTag)
-                responseContext.onSuccess(ChunkedByteBuffer.allocate(0))
-            }
+            data.toDo()
           } catch {
             case NonFatal(e) => logError(e.getMessage, e)
           }
@@ -139,5 +142,5 @@ class NettyBlockRpcServer(
   }
 
   /** A poison endpoint that indicates MessageLoop should exit its message loop. */
-  private val PoisonPill = new ReceiveMessage(null, null, null)
+  private val PoisonPill = new ReceiveMessage(null, null)
 }

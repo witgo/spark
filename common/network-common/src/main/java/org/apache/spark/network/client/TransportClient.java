@@ -264,6 +264,52 @@ public class TransportClient implements Closeable {
   }
 
   /**
+   * Sends an opaque message to the RpcHandler on the server-side. The callback will be invoked
+   * with the server's response or upon any failure.
+   *
+   * @param message The message to send.
+   * @param byteCount The size of message
+   * @param  isBodyInFrame Whether to include the body of the message in the same
+   *                       frame as the message.
+   * @param callback Callback to handle the RPC's reply.
+   * @return The RPC's id.
+   */
+  public long sendRpc(InputStream message, long byteCount, boolean isBodyInFrame,
+                      final RpcResponseCallback callback) {
+    final String serverAddr = NettyUtils.getRemoteAddress(channel);
+    final long startTime = System.currentTimeMillis();
+    logger.trace("Sending RPC to {}", serverAddr);
+
+    final long requestId = Math.abs(UUID.randomUUID().getLeastSignificantBits());
+    handler.addRpcRequest(requestId, callback);
+
+    channel.writeAndFlush(new RpcRequest(requestId,
+        new InputStreamManagedBuffer(message, byteCount))).addListener(
+        new ChannelFutureListener() {
+          @Override
+          public void operationComplete(ChannelFuture future) throws Exception {
+            if (future.isSuccess()) {
+              long timeTaken = System.currentTimeMillis() - startTime;
+              logger.trace("Sending request {} to {} took {} ms", requestId, serverAddr, timeTaken);
+            } else {
+              String errorMsg = String.format("Failed to send RPC %s to %s: %s", requestId,
+                  serverAddr, future.cause());
+              logger.error(errorMsg, future.cause());
+              handler.removeRpcRequest(requestId);
+              channel.close();
+              try {
+                callback.onFailure(new IOException(errorMsg, future.cause()));
+              } catch (Exception e) {
+                logger.error("Uncaught exception in RPC response callback handler!", e);
+              }
+            }
+          }
+        });
+
+    return requestId;
+  }
+
+  /**
    * Synchronously sends an opaque message to the RpcHandler on the server-side, waiting for up to
    * a specified timeout for a response.
    */

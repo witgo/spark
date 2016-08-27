@@ -38,11 +38,11 @@ public final class RpcRequest extends AbstractMessage implements RequestMessage 
   public final long byteCount;
 
   public RpcRequest(long requestId, ManagedBuffer message) {
-    this(requestId, message.size(), message);
+    this(requestId, message.size(), true, message);
   }
 
-  public RpcRequest(long requestId, long byteCount, ManagedBuffer buffer) {
-    super(buffer, byteCount <= MAX_FRAME_SIZE);
+  public RpcRequest(long requestId, long byteCount, boolean isBodyInFrame, ManagedBuffer buffer) {
+    super(buffer, isBodyInFrame);
     this.requestId = requestId;
     this.byteCount = byteCount;
   }
@@ -55,23 +55,26 @@ public final class RpcRequest extends AbstractMessage implements RequestMessage 
     // The integer (a.k.a. the body size) is not really used, since that information is already
     // encoded in the frame length. But this maintains backwards compatibility with versions of
     // RpcRequest that use Encoders.ByteArrays.
-    return 8 + 8;
+    return 8 + 8 + 1;
   }
 
   @Override
   public void encode(OutputStream out) throws IOException {
     Encoders.Longs.encode(out, requestId);
     Encoders.Longs.encode(out, byteCount);
+    int ibif = isBodyInFrame() ? 1 : 0;
+    Encoders.Bytes.encode(out, (byte) ibif);
   }
 
   public static RpcRequest decode(InputStream in) throws IOException {
     long requestId = Encoders.Longs.decode(in);
     long byteCount =  Encoders.Longs.decode(in);
+    boolean isBodyInFrame = Encoders.Bytes.decode(in) !=1;
     ManagedBuffer managedBuf = null;
     if (byteCount <= MAX_FRAME_SIZE) {
       managedBuf = new InputStreamManagedBuffer(in, byteCount);
     }
-    return new RpcRequest(requestId, byteCount, managedBuf);
+    return new RpcRequest(requestId, byteCount,isBodyInFrame, managedBuf);
   }
 
   @Override
