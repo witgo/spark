@@ -20,7 +20,6 @@ package org.apache.spark.executor
 import java.io.{File, NotSerializableException}
 import java.lang.management.ManagementFactory
 import java.net.URL
-import java.nio.ByteBuffer
 import java.util.Properties
 import java.util.concurrent.{ConcurrentHashMap, TimeUnit}
 import javax.annotation.concurrent.GuardedBy
@@ -33,9 +32,9 @@ import org.apache.spark._
 import org.apache.spark.deploy.SparkHadoopUtil
 import org.apache.spark.internal.Logging
 import org.apache.spark.memory.TaskMemoryManager
-import org.apache.spark.network.buffer.ChunkedByteBuffer
+import org.apache.spark.network.buffer.{ChunkedByteBuffer, ChunkedByteBufferUtil}
 import org.apache.spark.rpc.RpcTimeout
-import org.apache.spark.scheduler.{AccumulableInfo, DirectTaskResult, IndirectTaskResult, Task}
+import org.apache.spark.scheduler.{DirectTaskResult, IndirectTaskResult, Task}
 import org.apache.spark.shuffle.FetchFailedException
 import org.apache.spark.storage.{StorageLevel, TaskResultBlockId}
 import org.apache.spark.util._
@@ -62,7 +61,7 @@ private[spark] class Executor(
   private val currentFiles: HashMap[String, Long] = new HashMap[String, Long]()
   private val currentJars: HashMap[String, Long] = new HashMap[String, Long]()
 
-  private val EMPTY_BYTE_BUFFER = ChunkedByteBuffer.wrap(new Array[Byte](0))
+  private val EMPTY_BYTE_BUFFER = ChunkedByteBufferUtil.wrap()
 
   private val conf = env.conf
 

@@ -17,8 +17,6 @@
 
 package org.apache.spark.executor
 
-import java.nio.ByteBuffer
-
 import scala.collection.JavaConverters._
 
 import org.apache.mesos.{Executor => MesosExecutor, ExecutorDriver, MesosExecutorDriver}
@@ -30,6 +28,7 @@ import org.apache.spark.TaskState.TaskState
 import org.apache.spark.deploy.SparkHadoopUtil
 import org.apache.spark.internal.Logging
 import org.apache.spark.network.buffer.ChunkedByteBuffer
+import org.apache.spark.network.buffer.ChunkedByteBufferUtil
 import org.apache.spark.scheduler.cluster.mesos.MesosTaskLaunchData
 import org.apache.spark.util.Utils
 
@@ -91,7 +90,7 @@ private[spark] class MesosExecutorBackend
     } else {
       SparkHadoopUtil.get.runAsSparkUser { () =>
         executor.launchTask(this, taskId = taskId, attemptNumber = taskData.attemptNumber,
-          taskInfo.getName, ChunkedByteBuffer.wrap(taskData.serializedTask))
+          taskInfo.getName, ChunkedByteBufferUtil.wrap(taskData.serializedTask))
       }
     }
   }

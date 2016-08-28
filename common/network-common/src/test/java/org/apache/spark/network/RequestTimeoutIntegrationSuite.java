@@ -17,9 +17,22 @@
 
 package org.apache.spark.network;
 
+import java.io.IOException;
+import java.io.InputStream;
+import java.nio.ByteBuffer;
+import java.util.*;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Semaphore;
+import java.util.concurrent.TimeUnit;
+
 import com.google.common.collect.Maps;
 import com.google.common.util.concurrent.Uninterruptibles;
+import org.junit.*;
+
+import static org.junit.Assert.*;
+
 import org.apache.spark.network.buffer.ChunkedByteBuffer;
+import org.apache.spark.network.buffer.ChunkedByteBufferUtil;
 import org.apache.spark.network.buffer.ManagedBuffer;
 import org.apache.spark.network.buffer.NioManagedBuffer;
 import org.apache.spark.network.client.ChunkReceivedCallback;
@@ -31,16 +44,6 @@ import org.apache.spark.network.server.StreamManager;
 import org.apache.spark.network.server.TransportServer;
 import org.apache.spark.network.util.MapConfigProvider;
 import org.apache.spark.network.util.TransportConf;
-import org.junit.*;
-import static org.junit.Assert.*;
-
-import java.io.IOException;
-import java.io.InputStream;
-import java.nio.ByteBuffer;
-import java.util.*;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.Semaphore;
-import java.util.concurrent.TimeUnit;
 
 /**
  * Suite which ensures that requests that go without a response for the network timeout period are
@@ -97,7 +100,7 @@ public class RequestTimeoutIntegrationSuite {
           RpcResponseCallback callback) throws Exception {
         try {
           semaphore.acquire();
-          callback.onSuccess(ChunkedByteBuffer.wrap(ByteBuffer.allocate(responseSize)));
+          callback.onSuccess(ChunkedByteBufferUtil.wrap(ByteBuffer.allocate(responseSize)));
         } catch (InterruptedException e) {
           // do nothing
         }
@@ -116,13 +119,13 @@ public class RequestTimeoutIntegrationSuite {
 
     // First completes quickly (semaphore starts at 1).
     TestCallback callback0 = new TestCallback();
-    client.sendRpc(ChunkedByteBuffer.wrap(ByteBuffer.allocate(0)), callback0);
+    client.sendRpc(ChunkedByteBufferUtil.wrap(ByteBuffer.allocate(0)), callback0);
     callback0.latch.await();
     assertEquals(responseSize, callback0.successLength);
 
     // Second times out after 10 seconds, with slack. Must be IOException.
     TestCallback callback1 = new TestCallback();
-    client.sendRpc(ChunkedByteBuffer.wrap(ByteBuffer.allocate(0)), callback1);
+    client.sendRpc(ChunkedByteBufferUtil.wrap(ByteBuffer.allocate(0)), callback1);
     callback1.latch.await(60, TimeUnit.SECONDS);
     assertNotNull(callback1.failure);
     assertTrue(callback1.failure instanceof IOException);
@@ -144,7 +147,7 @@ public class RequestTimeoutIntegrationSuite {
           RpcResponseCallback callback) {
         try {
           semaphore.acquire();
-          callback.onSuccess(ChunkedByteBuffer.wrap(ByteBuffer.allocate(responseSize)));
+          callback.onSuccess(ChunkedByteBufferUtil.wrap(ByteBuffer.allocate(responseSize)));
         } catch (InterruptedException e) {
           // do nothing
         }
@@ -164,7 +167,7 @@ public class RequestTimeoutIntegrationSuite {
     TransportClient client0 =
       clientFactory.createClient(TestUtils.getLocalHost(), server.getPort());
     TestCallback callback0 = new TestCallback();
-    client0.sendRpc(ChunkedByteBuffer.wrap(ByteBuffer.allocate(0)), callback0);
+    client0.sendRpc(ChunkedByteBufferUtil.wrap(ByteBuffer.allocate(0)), callback0);
     callback0.latch.await();
     assertTrue(callback0.failure instanceof IOException);
     assertFalse(client0.isActive());
@@ -174,7 +177,7 @@ public class RequestTimeoutIntegrationSuite {
     TransportClient client1 =
       clientFactory.createClient(TestUtils.getLocalHost(), server.getPort());
     TestCallback callback1 = new TestCallback();
-    client1.sendRpc(ChunkedByteBuffer.wrap(ByteBuffer.allocate(0)), callback1);
+    client1.sendRpc(ChunkedByteBufferUtil.wrap(ByteBuffer.allocate(0)), callback1);
     callback1.latch.await();
     assertEquals(responseSize, callback1.successLength);
     assertNull(callback1.failure);

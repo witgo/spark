@@ -24,7 +24,7 @@ import io.netty.channel.Channel;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import org.apache.spark.network.buffer.ChunkedByteBuffer;
+import org.apache.spark.network.buffer.ChunkedByteBufferUtil;
 import org.apache.spark.network.client.RpcResponseCallback;
 import org.apache.spark.network.client.TransportClient;
 import org.apache.spark.network.server.RpcHandler;
@@ -95,7 +95,7 @@ class SaslRpcHandler extends RpcHandler {
     }
 
     byte[] response; response = saslServer.response(saslMessage.body().nioByteBuffer().toArray());
-    callback.onSuccess(ChunkedByteBuffer.wrap(response));
+    callback.onSuccess(ChunkedByteBufferUtil.wrap(response));
 
     // Setup encryption after the SASL response is sent, otherwise the client can't parse the
     // response. It's ok to change the channel pipeline here since we are processing an incoming

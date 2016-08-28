@@ -34,7 +34,7 @@ import java.nio.ByteBuffer;
  * In that case, if the buffer is going to be passed around to a different thread, retain/release
  * should be called.
  */
-public abstract class ManagedBuffer {
+public abstract class ManagedBuffer extends AbstractReferenceCounted {
 
   /** Number of bytes of the data. */
   public abstract long size();
@@ -56,14 +56,37 @@ public abstract class ManagedBuffer {
   /**
    * Increment the reference count by one if applicable.
    */
-  public abstract ManagedBuffer retain();
+  @Override
+  public ManagedBuffer retain() {
+    super.retain();
+    return this;
+  }
 
-  /**
-   * If applicable, decrement the reference count by one and deallocates the buffer if the
-   * reference count reaches zero.
-   */
-  public abstract ManagedBuffer release();
+  @Override
+  public ManagedBuffer retain(int increment) {
+    if (increment <= 0) {
+      throw new IllegalArgumentException("increment: " + increment + " (expected: > 0)");
+    }
+    for (int i = 0; i < increment; i++) {
+      retain();
+    }
+    return this;
+  }
 
+  @Override
+  public boolean release(int decrement) {
+    if (decrement <= 0) {
+      throw new IllegalArgumentException("decrement: " + decrement + " (expected: > 0)");
+    }
+    boolean ret = false;
+    for (int i = 0; i < decrement; i++) {
+      ret = release();
+    }
+    return ret;
+  }
+
+  @Override
+  protected void deallocate() {}
   /**
    * Convert the buffer into an Netty object, used to write the data out. The return value is either
    * a {@link io.netty.buffer.ByteBuf} or a {@link io.netty.channel.FileRegion}.

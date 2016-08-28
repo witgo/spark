@@ -22,13 +22,13 @@ import java.nio.ByteBuffer
 import com.google.common.io.ByteStreams
 
 import org.apache.spark.SparkFunSuite
-import org.apache.spark.network.buffer.{Allocator, ChunkedByteBuffer}
+import org.apache.spark.network.buffer.ChunkedByteBufferUtil
 import org.apache.spark.network.util.ByteArrayWritableChannel
 
 class ChunkedByteBufferSuite extends SparkFunSuite {
 
   test("no chunks") {
-    val emptyChunkedByteBuffer = new ChunkedByteBuffer(Array.empty[ByteBuffer])
+    val emptyChunkedByteBuffer = ChunkedByteBufferUtil.wrap(Array.empty[ByteBuffer])
     assert(emptyChunkedByteBuffer.size === 0)
     assert(emptyChunkedByteBuffer.getChunks().isEmpty)
     assert(emptyChunkedByteBuffer.toArray === Array.empty)
@@ -39,21 +39,19 @@ class ChunkedByteBufferSuite extends SparkFunSuite {
   }
 
   test("getChunks() duplicates chunks") {
-    val chunkedByteBuffer = new ChunkedByteBuffer(Array(ByteBuffer.allocate(8)))
+    val chunkedByteBuffer = ChunkedByteBufferUtil.wrap(Array(ByteBuffer.allocate(8)))
     chunkedByteBuffer.getChunks().head.position(4)
     assert(chunkedByteBuffer.getChunks().head.position() === 0)
   }
 
   test("copy() does not affect original buffer's position") {
-    val chunkedByteBuffer = new ChunkedByteBuffer(Array(ByteBuffer.allocate(8)))
-    chunkedByteBuffer.copy(new Allocator {
-      override def allocate(len: Int): ByteBuffer = ByteBuffer.allocate(len)
-    })
+    val chunkedByteBuffer = ChunkedByteBufferUtil.wrap(Array(ByteBuffer.allocate(8)))
+    chunkedByteBuffer.copy(ChunkedByteBufferUtil.DEFAULT_ALLOCATOR)
     assert(chunkedByteBuffer.getChunks().head.position() === 0)
   }
 
   test("writeFully() does not affect original buffer's position") {
-    val chunkedByteBuffer = new ChunkedByteBuffer(Array(ByteBuffer.allocate(8)))
+    val chunkedByteBuffer = ChunkedByteBufferUtil.wrap(Array(ByteBuffer.allocate(8)))
     chunkedByteBuffer.writeFully(new ByteArrayWritableChannel(chunkedByteBuffer.size.toInt))
     assert(chunkedByteBuffer.getChunks().head.position() === 0)
   }
@@ -61,14 +59,14 @@ class ChunkedByteBufferSuite extends SparkFunSuite {
   test("toArray()") {
     val empty = ByteBuffer.wrap(Array[Byte]())
     val bytes = ByteBuffer.wrap(Array.tabulate(8)(_.toByte))
-    val chunkedByteBuffer = new ChunkedByteBuffer(Array(bytes, bytes, empty))
+    val chunkedByteBuffer = ChunkedByteBufferUtil.wrap(Array(bytes, bytes, empty))
     assert(chunkedByteBuffer.toArray === bytes.array() ++ bytes.array())
   }
 
   test("toArray() throws UnsupportedOperationException if size exceeds 2GB") {
     val fourMegabyteBuffer = ByteBuffer.allocate(1024 * 1024 * 4)
     fourMegabyteBuffer.limit(fourMegabyteBuffer.capacity())
-    val chunkedByteBuffer = new ChunkedByteBuffer(Array.fill(1024)(fourMegabyteBuffer))
+    val chunkedByteBuffer = ChunkedByteBufferUtil.wrap(Array.fill(1024)(fourMegabyteBuffer))
     assert(chunkedByteBuffer.size === (1024L * 1024L * 1024L * 4L))
     intercept[RuntimeException] {
       chunkedByteBuffer.toArray
@@ -79,7 +77,7 @@ class ChunkedByteBufferSuite extends SparkFunSuite {
     val empty = ByteBuffer.wrap(Array[Byte]())
     val bytes1 = ByteBuffer.wrap(Array.tabulate(256)(_.toByte))
     val bytes2 = ByteBuffer.wrap(Array.tabulate(128)(_.toByte))
-    val chunkedByteBuffer = new ChunkedByteBuffer(Array(empty, bytes1, bytes2))
+    val chunkedByteBuffer = ChunkedByteBufferUtil.wrap(Array(empty, bytes1, bytes2))
     assert(chunkedByteBuffer.size === bytes1.limit() + bytes2.limit())
 
     val inputStream = chunkedByteBuffer.toInputStream(false)

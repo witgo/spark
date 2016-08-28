@@ -34,7 +34,7 @@ public class NioManagedBuffer extends ManagedBuffer {
   }
 
   public NioManagedBuffer(ByteBuffer buf) {
-    this(new ChunkedByteBuffer(buf));
+    this(ChunkedByteBufferUtil.wrap(buf));
   }
 
   @Override
@@ -44,7 +44,7 @@ public class NioManagedBuffer extends ManagedBuffer {
 
   @Override
   public ChunkedByteBuffer nioByteBuffer() throws IOException {
-    return new ChunkedByteBuffer(buf.getChunks());
+    return ChunkedByteBufferUtil.wrap(buf.getChunks());
   }
 
   @Override
@@ -54,11 +54,7 @@ public class NioManagedBuffer extends ManagedBuffer {
 
   @Override
   public ManagedBuffer retain() {
-    return this;
-  }
-
-  @Override
-  public ManagedBuffer release() {
+    super.retain();
     return this;
   }
 

@@ -17,8 +17,6 @@
 
 package org.apache.spark.deploy.master
 
-import java.nio.ByteBuffer
-
 import scala.collection.JavaConverters._
 import scala.reflect.ClassTag
 
@@ -28,7 +26,7 @@ import org.apache.zookeeper.CreateMode
 import org.apache.spark.SparkConf
 import org.apache.spark.deploy.SparkCuratorUtil
 import org.apache.spark.internal.Logging
-import org.apache.spark.network.buffer.ChunkedByteBuffer
+import org.apache.spark.network.buffer.ChunkedByteBufferUtil
 import org.apache.spark.serializer.Serializer
 
 
@@ -69,7 +67,7 @@ private[master] class ZooKeeperPersistenceEngine(conf: SparkConf, val serializer
   private def deserializeFromFile[T](filename: String)(implicit m: ClassTag[T]): Option[T] = {
     val fileData = zk.getData().forPath(WORKING_DIR + "/" + filename)
     try {
-      Some(serializer.newInstance().deserialize[T](ChunkedByteBuffer.wrap(fileData)))
+      Some(serializer.newInstance().deserialize[T](ChunkedByteBufferUtil.wrap(fileData)))
     } catch {
       case e: Exception =>
         logWarning("Exception while reading persisted file, deleting", e)

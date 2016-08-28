@@ -95,7 +95,7 @@ public class ChunkedByteBufferInputStream extends InputStream {
 
   public void close() throws IOException {
     if (chunkedByteBuffer != null && dispose) {
-      chunkedByteBuffer.dispose();
+      chunkedByteBuffer.release();
     }
     chunkedByteBuffer = null;
     chunks = null;
@@ -115,6 +115,6 @@ public class ChunkedByteBufferInputStream extends InputStream {
         currentChunk = null;
       }
     }
-    return ChunkedByteBuffer.wrap(list.toArray(new ByteBuffer[list.size()]));
+    return ChunkedByteBufferUtil.wrap(list.toArray(new ByteBuffer[list.size()]));
   }
 }

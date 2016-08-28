@@ -21,8 +21,6 @@ import java.io.IOException;
 import java.io.InputStream;
 
 import com.google.common.base.Preconditions;
-import io.netty.util.AbstractReferenceCounted;
-import io.netty.util.IllegalReferenceCountException;
 
 import org.apache.spark.network.util.LimitedInputStream;
 
@@ -31,17 +29,6 @@ public class InputStreamManagedBuffer extends ManagedBuffer {
   private final long limit;
   private boolean hasRead = false;
   private ChunkedByteBuffer buffer = null;
-  private final AbstractReferenceCounted referenceCounter = new AbstractReferenceCounted() {
-    @Override
-    protected void deallocate() {
-      try {
-        buffer = null;
-        inputStream.close();
-      } catch (Throwable e) {
-        throw new RuntimeException(e);
-      }
-    }
-  };
 
   public InputStreamManagedBuffer(InputStream in, long byteCount) {
     this(in, byteCount, false);
@@ -60,7 +47,7 @@ public class InputStreamManagedBuffer extends ManagedBuffer {
     ensureAccessible();
     if (hasRead) return buffer;
     hasRead = true;
-    buffer = ChunkedByteBuffer.wrap(inputStream, 32 * 1024);
+    buffer = ChunkedByteBufferUtil.wrap(inputStream, 32 * 1024);
     Preconditions.checkState(buffer.size() == limit,
         "Expect the size of buffer is (%s), but get (%s)", limit, buffer.size());
     return buffer;
@@ -72,18 +59,6 @@ public class InputStreamManagedBuffer extends ManagedBuffer {
     return inputStream;
   }
 
-  public ManagedBuffer retain() {
-    ensureAccessible();
-    referenceCounter.retain();
-    return this;
-  }
-
-  public ManagedBuffer release() {
-    ensureAccessible();
-    referenceCounter.release();
-    return this;
-  }
-
   public Object convertToNetty() throws IOException {
     ensureAccessible();
     if (hasRead) {
@@ -93,11 +68,21 @@ public class InputStreamManagedBuffer extends ManagedBuffer {
     }
   }
 
+  @Override
+  protected void deallocate() {
+    try {
+      buffer = null;
+      inputStream.close();
+    } catch (Throwable e) {
+      throw new RuntimeException(e);
+    }
+  }
+
   /**
    * Should be called by every method that tries to access the buffers content to check
    * if the buffer was released before.
    */
   protected final void ensureAccessible() {
-    if (referenceCounter.refCnt() == 0) throw new IllegalReferenceCountException(0);
+    if (refCnt() == 0) throw new IllegalReferenceCountException(0);
   }
 }

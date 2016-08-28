@@ -21,7 +21,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 
-import org.apache.spark.network.buffer.ChunkedByteBuffer;
+import org.apache.spark.network.buffer.ChunkedByteBufferUtil;
 import org.apache.spark.network.buffer.InputStreamManagedBuffer;
 import org.apache.spark.network.buffer.ManagedBuffer;
 import org.apache.spark.network.buffer.NioManagedBuffer;
@@ -41,7 +41,7 @@ class SaslMessage extends AbstractMessage {
   public final String appId;
 
   SaslMessage(String appId, byte[] message) {
-    this(appId, new NioManagedBuffer(ChunkedByteBuffer.wrap(message)));
+    this(appId, new NioManagedBuffer(ChunkedByteBufferUtil.wrap(message)));
   }
 
   SaslMessage(String appId, ManagedBuffer message) {

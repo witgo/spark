@@ -429,12 +429,14 @@ private[spark] class MemoryStore(
       entries.remove(blockId)
     }
     if (entry != null) {
+      val entrySize = entry.size
+      val entryMemoryMode = entry.memoryMode
       entry match {
-        case SerializedMemoryEntry(buffer, _, _) => buffer.dispose()
+        case SerializedMemoryEntry(buffer, _, _) => buffer.release()
         case _ =>
       }
-      memoryManager.releaseStorageMemory(entry.size, entry.memoryMode)
-      logDebug(s"Block $blockId of size ${entry.size} dropped " +
+      memoryManager.releaseStorageMemory(entrySize, entryMemoryMode)
+      logDebug(s"Block $blockId of size $entrySize dropped " +
         s"from memory (free ${maxMemory - blocksMemoryUsed})")
       true
     } else {
@@ -741,7 +743,7 @@ private[storage] class PartiallySerializedBlock[T](
     taskContext.addTaskCompletionListener { _ =>
       // When a task completes, its unroll memory will automatically be freed. Thus we do not call
       // releaseUnrollMemoryForThisTask() here because we want to avoid double-freeing.
-      unrolled.dispose()
+      unrolled.release()
     }
   }
 
@@ -756,7 +758,7 @@ private[storage] class PartiallySerializedBlock[T](
       redirectableOutputStream.setOutputStream(ByteStreams.nullOutputStream())
       serializationStream.close()
     } finally {
-      unrolled.dispose()
+      unrolled.release()
       memoryStore.releaseUnrollMemoryForThisTask(memoryMode, unrollMemory)
     }
   }

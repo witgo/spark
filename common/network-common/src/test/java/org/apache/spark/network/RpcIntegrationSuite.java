@@ -35,6 +35,7 @@ import org.junit.Test;
 import static org.junit.Assert.*;
 
 import org.apache.spark.network.buffer.ChunkedByteBuffer;
+import org.apache.spark.network.buffer.ChunkedByteBufferUtil;
 import org.apache.spark.network.client.RpcResponseCallback;
 import org.apache.spark.network.client.TransportClient;
 import org.apache.spark.network.client.TransportClientFactory;
@@ -53,7 +54,7 @@ public class RpcIntegrationSuite {
   static List<String> oneWayMsgs;
 
   private static String inputStreamToString(InputStream in) throws Exception {
-    return JavaUtils.bytesToString(ChunkedByteBuffer.wrap(in, 1024).toByteBuffer());
+    return JavaUtils.bytesToString(ChunkedByteBufferUtil.wrap(in, 1024).toByteBuffer());
   }
 
   @BeforeClass
@@ -68,7 +69,7 @@ public class RpcIntegrationSuite {
         String msg = inputStreamToString(message);
         String[] parts = msg.split("/");
         if (parts[0].equals("hello")) {
-          callback.onSuccess(ChunkedByteBuffer.wrap(
+          callback.onSuccess(ChunkedByteBufferUtil.wrap(
               JavaUtils.stringToBytes("Hello, " + parts[1] + "!")));
         } else if (parts[0].equals("return error")) {
           callback.onFailure(new RuntimeException("Returned: " + parts[1]));
@@ -127,7 +128,7 @@ public class RpcIntegrationSuite {
     };
 
     for (String command : commands) {
-      client.sendRpc(ChunkedByteBuffer.wrap(JavaUtils.stringToBytes(command)), callback);
+      client.sendRpc(ChunkedByteBufferUtil.wrap(JavaUtils.stringToBytes(command)), callback);
     }
 
     if (!sem.tryAcquire(commands.length, 5, TimeUnit.SECONDS)) {
@@ -184,7 +185,7 @@ public class RpcIntegrationSuite {
     final String message = "no reply";
     TransportClient client = clientFactory.createClient(TestUtils.getLocalHost(), server.getPort());
     try {
-      client.send(ChunkedByteBuffer.wrap(JavaUtils.stringToBytes(message)));
+      client.send(ChunkedByteBufferUtil.wrap(JavaUtils.stringToBytes(message)));
       assertEquals(0, client.getHandler().numOutstandingRequests());
 
       // Make sure the message arrives.

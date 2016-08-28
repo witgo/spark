@@ -17,8 +17,7 @@
 
 package org.apache.spark.network.netty
 
-import java.io.{DataInputStream, InputStream}
-import java.nio.ByteBuffer
+import java.io.InputStream
 
 import scala.collection.JavaConverters._
 import scala.language.existentials
@@ -26,7 +25,7 @@ import scala.reflect.ClassTag
 
 import org.apache.spark.internal.Logging
 import org.apache.spark.network.BlockDataManager
-import org.apache.spark.network.buffer.{ChunkedByteBuffer, ManagedBuffer, NioManagedBuffer}
+import org.apache.spark.network.buffer.{ChunkedByteBufferUtil, ManagedBuffer, NioManagedBuffer}
 import org.apache.spark.network.client.{RpcResponseCallback, TransportClient}
 import org.apache.spark.network.server.{OneForOneStreamManager, RpcHandler, StreamManager}
 import org.apache.spark.network.shuffle.protocol.{BlockTransferMessage, OpenBlocks, StreamHandle, UploadBlock}
@@ -68,13 +67,13 @@ class NettyBlockRpcServer(
         val (level: StorageLevel, classTag: ClassTag[_]) = {
           serializer
             .newInstance()
-            .deserialize(ChunkedByteBuffer.wrap(uploadBlock.metadata))
+            .deserialize(ChunkedByteBufferUtil.wrap(uploadBlock.metadata))
             .asInstanceOf[(StorageLevel, ClassTag[_])]
         }
         val data = new NioManagedBuffer(uploadBlock.blockData)
         val blockId = BlockId(uploadBlock.blockId)
         blockManager.putBlockData(blockId, data, level, classTag)
-        responseContext.onSuccess(ChunkedByteBuffer.allocate(0))
+        responseContext.onSuccess(ChunkedByteBufferUtil.allocate(0))
     }
   }
 

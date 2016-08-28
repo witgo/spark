@@ -26,7 +26,7 @@ import org.apache.hadoop.fs.Path
 
 import org.apache.spark.{SparkConf, SparkException}
 import org.apache.spark.internal.Logging
-import org.apache.spark.network.buffer.ChunkedByteBuffer
+import org.apache.spark.network.buffer.{ChunkedByteBuffer, ChunkedByteBufferUtil}
 import org.apache.spark.serializer.SerializerManager
 import org.apache.spark.storage._
 import org.apache.spark.streaming.receiver.WriteAheadLogBasedBlockHandler._
@@ -87,7 +87,8 @@ private[streaming] class BlockManagerBasedBlockHandler(
         putResult
       case ByteBufferBlock(byteBuffer) =>
         blockManager.putBytes(
-          blockId, ChunkedByteBuffer.wrap(byteBuffer.duplicate()), storageLevel, tellMaster = true)
+          blockId, ChunkedByteBufferUtil.wrap(byteBuffer.duplicate()), storageLevel,
+          tellMaster = true)
       case o =>
         throw new SparkException(
           s"Could not store $blockId to block manager, unexpected block type ${o.getClass.getName}")
@@ -182,7 +183,7 @@ private[streaming] class WriteAheadLogBasedBlockHandler(
         numRecords = countIterator.count
         serializedBlock
       case ByteBufferBlock(byteBuffer) =>
-        ChunkedByteBuffer.wrap(byteBuffer.duplicate())
+        ChunkedByteBufferUtil.wrap(byteBuffer.duplicate())
       case _ =>
         throw new Exception(s"Could not push $blockId to block manager, unexpected block type")
     }

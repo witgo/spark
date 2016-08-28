@@ -29,6 +29,7 @@ import org.apache.mesos.protobuf.ByteString
 import org.apache.spark.{SparkContext, SparkException, TaskState}
 import org.apache.spark.executor.MesosExecutorBackend
 import org.apache.spark.network.buffer.ChunkedByteBuffer
+import org.apache.spark.network.buffer.ChunkedByteBufferUtil
 import org.apache.spark.scheduler._
 import org.apache.spark.scheduler.cluster.ExecutorInfo
 import org.apache.spark.util.Utils
@@ -380,7 +381,7 @@ private[spark] class MesosFineGrainedSchedulerBackend(
         }
       }
       scheduler.statusUpdate(tid, state,
-        ChunkedByteBuffer.wrap(status.getData.asReadOnlyByteBuffer))
+        ChunkedByteBufferUtil.wrap(status.getData.asReadOnlyByteBuffer))
     }
   }
 

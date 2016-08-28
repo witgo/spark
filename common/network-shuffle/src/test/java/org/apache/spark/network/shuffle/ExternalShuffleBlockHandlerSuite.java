@@ -31,6 +31,7 @@ import static org.mockito.Matchers.any;
 import static org.mockito.Mockito.*;
 
 import org.apache.spark.network.buffer.ChunkedByteBuffer;
+import org.apache.spark.network.buffer.ChunkedByteBufferUtil;
 import org.apache.spark.network.buffer.ManagedBuffer;
 import org.apache.spark.network.buffer.NioManagedBuffer;
 import org.apache.spark.network.client.RpcResponseCallback;
@@ -128,7 +129,8 @@ public class ExternalShuffleBlockHandlerSuite {
   public void testBadMessages() throws Exception {
     RpcResponseCallback callback = mock(RpcResponseCallback.class);
 
-    ChunkedByteBuffer unserializableMsg =ChunkedByteBuffer.wrap(new byte[] { 0x12, 0x34, 0x56 });
+    ChunkedByteBuffer unserializableMsg = ChunkedByteBufferUtil.wrap(
+        new byte[]{0x12, 0x34, 0x56});
     try {
       handler.receive(client, unserializableMsg.toInputStream(), callback);
       fail("Should have thrown");
@@ -137,7 +139,7 @@ public class ExternalShuffleBlockHandlerSuite {
     }
 
     ChunkedByteBuffer unexpectedMsg = new UploadBlock("a", "e", "b", new byte[1],
-        ChunkedByteBuffer.wrap(new byte[2])).toChunkedByteBuffer();
+        ChunkedByteBufferUtil.wrap(new byte[2])).toChunkedByteBuffer();
     try {
       handler.receive(client, unexpectedMsg.toInputStream(), callback);
       fail("Should have thrown");

@@ -971,7 +971,7 @@ private[spark] class BlockManager(
         logDebug("Put block %s locally took %s".format(blockId, Utils.getUsedTimeMs(startTimeMs)))
         if (level.replication > 1) {
           val remoteStartTime = System.currentTimeMillis
-          val bytesToReplicate = doGetLocalBytes(blockId, info)
+          val bytesToReplicate = doGetLocalBytes(blockId, info).retain()
           // [SPARK-16550] Erase the typed classTag when using default serialization, since
           // NettyBlockRpcServer crashes when deserializing repl-defined classes.
           // TODO(ekl) remove this once the classloader issue on the remote end is fixed.
@@ -983,7 +983,7 @@ private[spark] class BlockManager(
           try {
             replicate(blockId, bytesToReplicate, level, remoteClassTag)
           } finally {
-            bytesToReplicate.dispose()
+            bytesToReplicate.release()
           }
           logDebug("Put block %s remotely took %s"
             .format(blockId, Utils.getUsedTimeMs(remoteStartTime)))
@@ -1014,7 +1014,7 @@ private[spark] class BlockManager(
       // put values read from disk into the MemoryStore.
       blockInfo.synchronized {
         if (memoryStore.contains(blockId)) {
-          diskBytes.dispose()
+          diskBytes.release()
           Some(memoryStore.getBytes(blockId).get)
         } else {
           val allocator = level.memoryMode match {
@@ -1033,7 +1033,7 @@ private[spark] class BlockManager(
             out.toChunkedByteBuffer
           })
           if (putSucceeded) {
-            diskBytes.dispose()
+            diskBytes.release()
             Some(memoryStore.getBytes(blockId).get)
           } else {
             None
