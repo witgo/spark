@@ -34,10 +34,16 @@ import org.apache.spark.network.buffer.ManagedBuffer;
 public final class RpcRequest extends AbstractMessage implements RequestMessage {
   /** Used to link an RPC request with its response. */
   public final long requestId;
+  public final long bodySize;
 
   public RpcRequest(long requestId, ManagedBuffer message) {
-    super(message, true);
+    this(requestId, message.size(), true, message);
+  }
+
+  public RpcRequest(long requestId, long bodySize, boolean isBodyInFrame, ManagedBuffer buffer) {
+    super(buffer, isBodyInFrame);
     this.requestId = requestId;
+    this.bodySize = bodySize;
   }
 
   @Override
@@ -48,20 +54,26 @@ public final class RpcRequest extends AbstractMessage implements RequestMessage 
     // The integer (a.k.a. the body size) is not really used, since that information is already
     // encoded in the frame length. But this maintains backwards compatibility with versions of
     // RpcRequest that use Encoders.ByteArrays.
-    return 8 + 8;
+    return 8 + 8 + 1;
   }
 
   @Override
   public void encode(OutputStream out) throws IOException {
     Encoders.Longs.encode(out, requestId);
-    Encoders.Longs.encode(out, body().size());
+    Encoders.Longs.encode(out, bodySize);
+    int ibif = isBodyInFrame() ? 1 : 0;
+    Encoders.Bytes.encode(out, (byte) ibif);
   }
 
   public static RpcRequest decode(InputStream in) throws IOException {
     long requestId = Encoders.Longs.decode(in);
-    long limit = Encoders.Longs.decode(in);
-    ManagedBuffer managedBuf = new InputStreamManagedBuffer(in, limit);
-    return new RpcRequest(requestId, managedBuf);
+    long byteCount = Encoders.Longs.decode(in);
+    boolean isBodyInFrame = Encoders.Bytes.decode(in) == 1;
+    ManagedBuffer managedBuf = null;
+    if (isBodyInFrame) {
+      managedBuf = new InputStreamManagedBuffer(in, byteCount);
+    }
+    return new RpcRequest(requestId, byteCount, isBodyInFrame, managedBuf);
   }
 
   @Override

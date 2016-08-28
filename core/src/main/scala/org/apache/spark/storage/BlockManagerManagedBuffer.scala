@@ -17,6 +17,8 @@
 
 package org.apache.spark.storage
 
+import java.io.InputStream
+
 import org.apache.spark.network.buffer.{ChunkedByteBuffer, ManagedBuffer, NettyManagedBuffer}
 
 /**
@@ -28,12 +30,26 @@ import org.apache.spark.network.buffer.{ChunkedByteBuffer, ManagedBuffer, NettyM
  * to the network layer's notion of retain / release counts.
  */
 private[storage] class BlockManagerManagedBuffer(
-    blockInfoManager: BlockInfoManager,
-    blockId: BlockId,
-    chunkedBuffer: ChunkedByteBuffer) extends NettyManagedBuffer(chunkedBuffer.toNetty) {
+  blockInfoManager: BlockInfoManager,
+  blockId: BlockId,
+  managedBuffer: ManagedBuffer) extends ManagedBuffer {
 
-  override def retain(): ManagedBuffer = {
-    super.retain()
+  def this(blockInfoManager: BlockInfoManager,
+    blockId: BlockId,
+    chunkedBuffer: ChunkedByteBuffer) {
+    this(blockInfoManager, blockId, new NettyManagedBuffer(chunkedBuffer.toNetty))
+  }
+
+  def size: Long = managedBuffer.size()
+
+  def nioByteBuffer: ChunkedByteBuffer = managedBuffer.nioByteBuffer()
+
+  def createInputStream: InputStream = managedBuffer.createInputStream()
+
+  override def refCnt: Int = managedBuffer.refCnt
+
+  override def retain: ManagedBuffer = {
+    managedBuffer.retain()
     val locked = blockInfoManager.lockForReading(blockId, blocking = false)
     assert(locked.isDefined)
     this
@@ -41,6 +57,8 @@ private[storage] class BlockManagerManagedBuffer(
 
   override def release(): Boolean = {
     blockInfoManager.unlock(blockId)
-    super.release()
+    managedBuffer.release()
   }
+
+  def convertToNetty: AnyRef = managedBuffer.convertToNetty()
 }

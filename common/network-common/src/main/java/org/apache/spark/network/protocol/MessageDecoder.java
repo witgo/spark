@@ -40,7 +40,7 @@ public final class MessageDecoder extends MessageToMessageDecoder<LinkedList<Byt
 
   @Override
   public void decode(ChannelHandlerContext ctx, LinkedList<ByteBuf> buf, List<Object> out) throws IOException {
-    InputStream in = new InputStreamByteBuf(buf);
+    InputStream in = new ByteBufInputStream(buf);
     Message.Type msgType = Message.Type.decode(in);
     Message decoded = decode(msgType, in);
     assert decoded.type() == msgType;

@@ -17,8 +17,6 @@
 
 package org.apache.spark.network.netty
 
-import java.nio.ByteBuffer
-
 import scala.collection.JavaConverters._
 import scala.concurrent.{Future, Promise}
 import scala.reflect.ClassTag
@@ -31,7 +29,6 @@ import org.apache.spark.network.sasl.{SaslClientBootstrap, SaslServerBootstrap}
 import org.apache.spark.network.server._
 import org.apache.spark.network.shuffle.{BlockFetchingListener, OneForOneBlockFetcher, RetryingBlockFetcher}
 import org.apache.spark.network.shuffle.protocol.UploadBlock
-import org.apache.spark.network.util.JavaUtils
 import org.apache.spark.serializer.JavaSerializer
 import org.apache.spark.storage.{BlockId, StorageLevel}
 import org.apache.spark.util.Utils
@@ -129,22 +126,22 @@ private[spark] class NettyBlockTransferService(
     // StorageLevel and ClassTag are serialized as bytes using our JavaSerializer.
     // Everything else is encoded using our binary protocol.
     val metadata = serializer.newInstance().serialize((level, classTag)).toArray
+    val uploadBlock = new UploadBlock(appId, execId, blockId.toString, metadata, blockData)
+    val encodedLength = uploadBlock.encodedLength() + 1
+    // val isBodyInFrame = encodedLength < 48 * 1024 * 1024
+    val isBodyInFrame = encodedLength < 1
+    val inputStream = uploadBlock.toInputStream
+    client.sendRpc(inputStream, encodedLength, isBodyInFrame, new RpcResponseCallback {
+      override def onSuccess(response: ChunkedByteBuffer): Unit = {
+        logTrace(s"Successfully uploaded block $blockId")
+        result.success((): Unit)
+      }
 
-    // Convert or copy nio buffer into array in order to serialize it.
-    val array = blockData.nioByteBuffer()
-
-    client.sendRpc(new UploadBlock(appId, execId, blockId.toString, metadata, array).
-      toChunkedByteBuffer,
-      new RpcResponseCallback {
-        override def onSuccess(response: ChunkedByteBuffer): Unit = {
-          logTrace(s"Successfully uploaded block $blockId")
-          result.success((): Unit)
-        }
-        override def onFailure(e: Throwable): Unit = {
-          logError(s"Error while uploading block $blockId", e)
-          result.failure(e)
-        }
-      })
+      override def onFailure(e: Throwable): Unit = {
+        logError(s"Error while uploading block $blockId", e)
+        result.failure(e)
+      }
+    })
 
     result.future
   }
