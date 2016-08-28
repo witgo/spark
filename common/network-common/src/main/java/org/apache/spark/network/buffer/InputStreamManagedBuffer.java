@@ -61,6 +61,8 @@ public class InputStreamManagedBuffer extends ManagedBuffer {
     if (hasRead) return buffer;
     hasRead = true;
     buffer = ChunkedByteBuffer.wrap(inputStream, 32 * 1024);
+    Preconditions.checkState(buffer.size() == limit,
+        "Expect the size of buffer is (%s), but get (%s)", limit, buffer.size());
     return buffer;
   }
 
