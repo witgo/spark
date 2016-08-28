@@ -47,9 +47,9 @@ public class NettyManagedBuffer extends ManagedBuffer {
       CompositeByteBuf compositeByteBuf = (CompositeByteBuf) buf;
       ByteBuffer[] buffers = compositeByteBuf.nioBuffers(compositeByteBuf.readerIndex(),
           compositeByteBuf.readableBytes());
-      return new ChunkedByteBuffer(buffers);
+      return ChunkedByteBufferUtil.wrap(buffers);
     } else {
-      return new ChunkedByteBuffer(buf.nioBuffer());
+      return ChunkedByteBufferUtil.wrap(buf.nioBuffer());
     }
   }
 
@@ -59,15 +59,19 @@ public class NettyManagedBuffer extends ManagedBuffer {
   }
 
   @Override
+  public int refCnt() {
+    return buf.refCnt();
+  }
+
+  @Override
   public ManagedBuffer retain() {
     buf.retain();
     return this;
   }
 
   @Override
-  public ManagedBuffer release() {
-    buf.release();
-    return this;
+  public boolean release() {
+    return buf.release();
   }
 
   @Override

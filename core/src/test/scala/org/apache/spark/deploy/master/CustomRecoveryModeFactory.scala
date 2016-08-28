@@ -19,14 +19,12 @@
 // when they are outside of org.apache.spark.
 package other.supplier
 
-import java.nio.ByteBuffer
-
 import scala.collection.mutable
 import scala.reflect.ClassTag
 
 import org.apache.spark.SparkConf
 import org.apache.spark.deploy.master._
-import org.apache.spark.network.buffer.ChunkedByteBuffer
+import org.apache.spark.network.buffer.ChunkedByteBufferUtil
 import org.apache.spark.serializer.Serializer
 
 class CustomRecoveryModeFactory(
@@ -87,7 +85,7 @@ class CustomPersistenceEngine(serializer: Serializer) extends PersistenceEngine 
   override def read[T: ClassTag](prefix: String): Seq[T] = {
     CustomPersistenceEngine.readAttempts += 1
     val results = for ((name, bytes) <- data; if name.startsWith(prefix))
-      yield serializer.newInstance().deserialize[T](ChunkedByteBuffer.wrap(bytes))
+      yield serializer.newInstance().deserialize[T](ChunkedByteBufferUtil.wrap(bytes))
     results.toSeq
   }
 }

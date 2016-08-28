@@ -35,7 +35,7 @@ import com.google.common.collect.Lists;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import org.apache.spark.network.buffer.ChunkedByteBuffer;
+import org.apache.spark.network.buffer.ChunkedByteBufferUtil;
 import org.apache.spark.network.buffer.ManagedBuffer;
 import org.apache.spark.network.client.RpcResponseCallback;
 import org.apache.spark.network.client.TransportClient;
@@ -129,7 +129,7 @@ public class ExternalShuffleBlockHandler extends RpcHandler {
         RegisterExecutor msg = (RegisterExecutor) msgObj;
         checkAuth(client, msg.appId);
         blockManager.registerExecutor(msg.appId, msg.execId, msg.executorInfo);
-        callback.onSuccess(ChunkedByteBuffer.wrap(ByteBuffer.wrap(new byte[0])));
+        callback.onSuccess(ChunkedByteBufferUtil.wrap(ByteBuffer.wrap(new byte[0])));
       } finally {
         responseDelayContext.stop();
       }

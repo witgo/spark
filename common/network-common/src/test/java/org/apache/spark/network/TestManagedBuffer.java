@@ -65,15 +65,19 @@ public class TestManagedBuffer extends ManagedBuffer {
   }
 
   @Override
+  public int refCnt() {
+    return underlying.refCnt();
+  }
+
+  @Override
   public ManagedBuffer retain() {
     underlying.retain();
     return this;
   }
 
   @Override
-  public ManagedBuffer release() {
-    underlying.release();
-    return this;
+  public boolean release() {
+    return underlying.release();
   }
 
   @Override

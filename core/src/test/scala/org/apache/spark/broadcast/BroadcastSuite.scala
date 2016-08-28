@@ -24,6 +24,7 @@ import org.scalatest.Assertions
 import org.apache.spark._
 import org.apache.spark.io.SnappyCompressionCodec
 import org.apache.spark.network.buffer.ChunkedByteBuffer
+import org.apache.spark.network.buffer.ChunkedByteBufferUtil
 import org.apache.spark.rdd.RDD
 import org.apache.spark.serializer.JavaSerializer
 import org.apache.spark.storage._
@@ -87,7 +88,7 @@ class BroadcastSuite extends SparkFunSuite with LocalSparkContext {
       val data: Array[Byte] = new Array[Byte](size)
       rand.nextBytes(data)
       val blocks = blockifyObject(data, blockSize, serializer, compressionCodec).map { block =>
-        ChunkedByteBuffer.wrap(block)
+        ChunkedByteBufferUtil.wrap(block)
       }
       val unblockified = unBlockifyObject[Array[Byte]](blocks, serializer, compressionCodec)
       assert(unblockified === data)

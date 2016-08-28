@@ -18,14 +18,13 @@
 package org.apache.spark.serializer
 
 import java.io._
-import java.nio.ByteBuffer
 
 import scala.reflect.ClassTag
 
 import org.apache.spark.SparkConf
 import org.apache.spark.annotation.DeveloperApi
-import org.apache.spark.network.buffer.{Allocator, ChunkedByteBuffer, ChunkedByteBufferOutputStream}
-import org.apache.spark.util.{ByteBufferInputStream, ByteBufferOutputStream, Utils}
+import org.apache.spark.network.buffer.{ChunkedByteBuffer, ChunkedByteBufferOutputStream, ChunkedByteBufferUtil}
+import org.apache.spark.util.Utils
 
 private[spark] class JavaSerializationStream(
     out: OutputStream, counterReset: Int, extraDebugInfo: Boolean)
@@ -96,9 +95,7 @@ private[spark] class JavaSerializerInstance(
   extends SerializerInstance {
 
   override def serialize[T: ClassTag](t: T): ChunkedByteBuffer = {
-    val bos = new ChunkedByteBufferOutputStream(32 * 1024, new Allocator {
-      override def allocate(len: Int) = ByteBuffer.allocate(len)
-    })
+    val bos = new ChunkedByteBufferOutputStream(32 * 1024, ChunkedByteBufferUtil.DEFAULT_ALLOCATOR)
     val out = serializeStream(bos)
     out.writeObject(t)
     out.close()

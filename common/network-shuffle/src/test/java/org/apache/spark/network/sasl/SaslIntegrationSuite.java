@@ -25,7 +25,6 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicReference;
 
 import com.google.common.collect.Lists;
-import org.apache.spark.network.buffer.ChunkedByteBuffer;
 import org.junit.After;
 import org.junit.AfterClass;
 import org.junit.BeforeClass;
@@ -36,6 +35,8 @@ import static org.mockito.Mockito.*;
 
 import org.apache.spark.network.TestUtils;
 import org.apache.spark.network.TransportContext;
+import org.apache.spark.network.buffer.ChunkedByteBuffer;
+import org.apache.spark.network.buffer.ChunkedByteBufferUtil;
 import org.apache.spark.network.buffer.ManagedBuffer;
 import org.apache.spark.network.client.ChunkReceivedCallback;
 import org.apache.spark.network.client.RpcResponseCallback;
@@ -112,7 +113,7 @@ public class SaslIntegrationSuite {
 
     TransportClient client = clientFactory.createClient(TestUtils.getLocalHost(), server.getPort());
     String msg = "Hello, World!";
-    ChunkedByteBuffer resp = client.sendRpcSync(ChunkedByteBuffer.wrap(JavaUtils.stringToBytes(msg)),
+    ChunkedByteBuffer resp = client.sendRpcSync(ChunkedByteBufferUtil.wrap(JavaUtils.stringToBytes(msg)),
         TIMEOUT_MS);
     assertEquals(msg, JavaUtils.bytesToString(resp.toByteBuffer()));
   }
@@ -143,7 +144,7 @@ public class SaslIntegrationSuite {
     TransportClient client = clientFactory.createClient(TestUtils.getLocalHost(),
         server.getPort());
     try {
-      client.sendRpcSync(ChunkedByteBuffer.wrap(ByteBuffer.allocate(13)), TIMEOUT_MS);
+      client.sendRpcSync(ChunkedByteBufferUtil.wrap(ByteBuffer.allocate(13)), TIMEOUT_MS);
       fail("Should have failed");
     } catch (Exception e) {
       assertTrue(e.getMessage(), e.getMessage().contains("Expected SaslMessage"));
@@ -151,7 +152,7 @@ public class SaslIntegrationSuite {
 
     try {
       // Guessing the right tag byte doesn't magically get you in...
-      client.sendRpcSync(ChunkedByteBuffer.wrap(new byte[] { (byte) 0xEA }),
+      client.sendRpcSync(ChunkedByteBufferUtil.wrap(new byte[] { (byte) 0xEA }),
           TIMEOUT_MS);
       fail("Should have failed");
     } catch (Exception e) {
@@ -283,7 +284,7 @@ public class SaslIntegrationSuite {
     public void receive(
         TransportClient client, InputStream message, RpcResponseCallback callback)
         throws Exception {
-      callback.onSuccess(ChunkedByteBuffer.wrap(message, 32 * 1024));
+      callback.onSuccess(ChunkedByteBufferUtil.wrap(message, 32 * 1024));
     }
 
     @Override

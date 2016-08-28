@@ -37,6 +37,7 @@ import org.scalatest.mock.MockitoSugar
 import org.apache.spark.{LocalSparkContext, SparkConf, SparkContext, SparkFunSuite}
 import org.apache.spark.executor.MesosExecutorBackend
 import org.apache.spark.network.buffer.ChunkedByteBuffer
+import org.apache.spark.network.buffer.ChunkedByteBufferUtil
 import org.apache.spark.scheduler.{LiveListenerBus, SparkListenerExecutorAdded, TaskDescription, TaskSchedulerImpl, WorkerOffer}
 import org.apache.spark.scheduler.cluster.ExecutorInfo
 
@@ -247,7 +248,7 @@ class MesosFineGrainedSchedulerBackendSuite
       (minCpu - backend.mesosExecutorCores).toInt
     ))
     val taskDesc = new TaskDescription(1L, 0, "s1", "n1", 0,
-      ChunkedByteBuffer.wrap(new Array[Byte](0)))
+      ChunkedByteBufferUtil.wrap(new Array[Byte](0)))
     when(taskScheduler.resourceOffers(expectedWorkerOffers)).thenReturn(Seq(Seq(taskDesc)))
     when(taskScheduler.CPUS_PER_TASK).thenReturn(2)
 
@@ -347,7 +348,7 @@ class MesosFineGrainedSchedulerBackendSuite
     ))
 
     val taskDesc = new TaskDescription(1L, 0, "s1", "n1", 0,
-      ChunkedByteBuffer.wrap(new Array[Byte](0)))
+      ChunkedByteBufferUtil.wrap(new Array[Byte](0)))
     when(taskScheduler.resourceOffers(expectedWorkerOffers)).thenReturn(Seq(Seq(taskDesc)))
     when(taskScheduler.CPUS_PER_TASK).thenReturn(1)
 

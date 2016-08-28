@@ -39,7 +39,7 @@ private[storage] class BlockManagerManagedBuffer(
     this
   }
 
-  override def release(): ManagedBuffer = {
+  override def release(): Boolean = {
     blockInfoManager.unlock(blockId)
     super.release()
   }

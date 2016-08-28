@@ -26,6 +26,7 @@ import com.google.common.io.Closeables
 import org.apache.spark.SparkConf
 import org.apache.spark.internal.Logging
 import org.apache.spark.network.buffer.ChunkedByteBuffer
+import org.apache.spark.network.buffer.ChunkedByteBufferUtil
 import org.apache.spark.util.Utils
 
 /**
@@ -98,9 +99,9 @@ private[spark] class DiskStore(conf: SparkConf, diskManager: DiskBlockManager) e
           }
         }
         buf.flip()
-        new ChunkedByteBuffer(buf)
+        ChunkedByteBufferUtil.wrap(buf)
       } else {
-        new ChunkedByteBuffer(channel.map(MapMode.READ_ONLY, 0, file.length))
+        ChunkedByteBufferUtil.wrap(channel.map(MapMode.READ_ONLY, 0, file.length))
       }
     } {
       channel.close()

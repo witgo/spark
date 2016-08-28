@@ -23,7 +23,7 @@ import org.junit.Test;
 import static org.junit.Assert.*;
 
 import org.apache.spark.network.shuffle.protocol.*;
-import org.apache.spark.network.buffer.ChunkedByteBuffer;
+import org.apache.spark.network.buffer.ChunkedByteBufferUtil;
 
 /** Verifies that all BlockTransferMessages can be serialized correctly. */
 public class BlockTransferMessagesSuite {
@@ -33,7 +33,7 @@ public class BlockTransferMessagesSuite {
     checkSerializeDeserialize(new RegisterExecutor("app-1", "exec-2", new ExecutorShuffleInfo(
         new String[]{"/local1", "/local2"}, 32, "MyShuffleManager")));
     checkSerializeDeserialize(new UploadBlock("app-1", "exec-2", "block-3", new byte[]{1, 2},
-        ChunkedByteBuffer.wrap( new byte[]{4, 5, 6, 7})));
+        ChunkedByteBufferUtil.wrap( new byte[]{4, 5, 6, 7})));
     checkSerializeDeserialize(new StreamHandle(12345, 16));
   }
 

@@ -71,7 +71,7 @@ public final class FileSegmentManagedBuffer extends ManagedBuffer {
           }
         }
         buf.flip();
-        return  new ChunkedByteBuffer(buf);
+        return ChunkedByteBufferUtil.wrap(buf);
       } else {
         int pageSize = 32 * 1024;
         int numPage = (int) Math.ceil((double) length / pageSize);
@@ -84,7 +84,7 @@ public final class FileSegmentManagedBuffer extends ManagedBuffer {
           len -= pageLen;
           off += pageLen;
         }
-        return new ChunkedByteBuffer(buffers);
+        return ChunkedByteBufferUtil.wrap(buffers);
         // return channel.map(FileChannel.MapMode.READ_ONLY, offset, length);
       }
     } catch (IOException e) {
@@ -131,11 +131,7 @@ public final class FileSegmentManagedBuffer extends ManagedBuffer {
 
   @Override
   public ManagedBuffer retain() {
-    return this;
-  }
-
-  @Override
-  public ManagedBuffer release() {
+    super.retain();
     return this;
   }
 

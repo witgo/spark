@@ -21,7 +21,7 @@ import java.nio.{ByteBuffer, MappedByteBuffer}
 import java.util.Arrays
 
 import org.apache.spark.{SparkConf, SparkFunSuite}
-import org.apache.spark.network.buffer.ChunkedByteBuffer
+import org.apache.spark.network.buffer.ChunkedByteBufferUtil
 
 class DiskStoreSuite extends SparkFunSuite {
 
@@ -30,7 +30,7 @@ class DiskStoreSuite extends SparkFunSuite {
 
     // Create a non-trivial (not all zeros) byte array
     val bytes = Array.tabulate[Byte](1000)(_.toByte)
-    val byteBuffer = new ChunkedByteBuffer(ByteBuffer.wrap(bytes))
+    val byteBuffer = ChunkedByteBufferUtil.wrap(ByteBuffer.wrap(bytes))
 
     val blockId = BlockId("rdd_1_2")
     val diskBlockManager = new DiskBlockManager(new SparkConf(), deleteFilesOnStop = true)

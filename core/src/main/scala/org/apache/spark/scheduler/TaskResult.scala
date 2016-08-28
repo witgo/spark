@@ -24,6 +24,7 @@ import scala.collection.mutable.ArrayBuffer
 
 import org.apache.spark.SparkEnv
 import org.apache.spark.network.buffer.ChunkedByteBuffer
+import org.apache.spark.network.buffer.ChunkedByteBufferUtil
 import org.apache.spark.storage.BlockId
 import org.apache.spark.util.{AccumulatorV2, Utils}
 
@@ -52,7 +53,7 @@ private[spark] class DirectTaskResult[T](
   }
 
   override def readExternal(in: ObjectInput): Unit = Utils.tryOrIOException {
-    valueBytes = new ChunkedByteBuffer()
+    valueBytes = ChunkedByteBufferUtil.wrap()
     valueBytes.readExternal(in)
     val numUpdates = in.readInt
     if (numUpdates == 0) {

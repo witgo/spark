@@ -41,13 +41,14 @@ import io.netty.channel.Channel;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelOutboundHandlerAdapter;
 import io.netty.channel.ChannelPromise;
-import org.apache.spark.network.buffer.ChunkedByteBuffer;
 import org.junit.Test;
 import org.mockito.invocation.InvocationOnMock;
 import org.mockito.stubbing.Answer;
 
 import org.apache.spark.network.TestUtils;
 import org.apache.spark.network.TransportContext;
+import org.apache.spark.network.buffer.ChunkedByteBuffer;
+import org.apache.spark.network.buffer.ChunkedByteBufferUtil;
 import org.apache.spark.network.buffer.FileSegmentManagedBuffer;
 import org.apache.spark.network.buffer.ManagedBuffer;
 import org.apache.spark.network.client.ChunkReceivedCallback;
@@ -143,7 +144,7 @@ public class SparkSaslSuite {
           ChunkedByteBuffer message = (ChunkedByteBuffer) invocation.getArguments()[1];
           RpcResponseCallback cb = (RpcResponseCallback) invocation.getArguments()[2];
           assertEquals("Ping", JavaUtils.bytesToString(message.toByteBuffer()));
-          cb.onSuccess(ChunkedByteBuffer.wrap(JavaUtils.stringToBytes("Pong")));
+          cb.onSuccess(ChunkedByteBufferUtil.wrap(JavaUtils.stringToBytes("Pong")));
           return null;
         }
       })
@@ -152,7 +153,8 @@ public class SparkSaslSuite {
 
     SaslTestCtx ctx = new SaslTestCtx(rpcHandler, encrypt, false);
     try {
-      ChunkedByteBuffer response = ctx.client.sendRpcSync(ChunkedByteBuffer.wrap(JavaUtils.stringToBytes("Ping")),
+      ChunkedByteBuffer response = ctx.client.sendRpcSync(
+          ChunkedByteBufferUtil.wrap(JavaUtils.stringToBytes("Ping")),
           TimeUnit.SECONDS.toMillis(10));
       assertEquals("Pong", JavaUtils.bytesToString(response.toByteBuffer()));
     } finally {
@@ -338,7 +340,7 @@ public class SparkSaslSuite {
     SaslTestCtx ctx = null;
     try {
       ctx = new SaslTestCtx(mock(RpcHandler.class), true, true);
-      ctx.client.sendRpcSync(ChunkedByteBuffer.wrap(JavaUtils.stringToBytes("Ping")),
+      ctx.client.sendRpcSync(ChunkedByteBufferUtil.wrap(JavaUtils.stringToBytes("Ping")),
         TimeUnit.SECONDS.toMillis(10));
       fail("Should have failed to send RPC to server.");
     } catch (Exception e) {

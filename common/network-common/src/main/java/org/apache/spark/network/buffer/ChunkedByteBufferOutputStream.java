@@ -53,11 +53,7 @@ public class ChunkedByteBufferOutputStream extends OutputStream {
   }
 
   public ChunkedByteBufferOutputStream(int chunkSize) {
-    this(chunkSize, new Allocator() {
-      public ByteBuffer allocate(int len) {
-        return ByteBuffer.allocate(len);
-      }
-    });
+    this(chunkSize, ChunkedByteBufferUtil.DEFAULT_ALLOCATOR);
   }
 
   public long size() {
@@ -98,7 +94,7 @@ public class ChunkedByteBufferOutputStream extends OutputStream {
         "toChunkedByteBuffer() can only be called once");
     toChunkedByteBufferWasCalled = true;
     if (lastChunkIndex == -1) {
-      return new ChunkedByteBuffer(new ByteBuffer[0]);
+      return ChunkedByteBufferUtil.wrap(new ByteBuffer[0]);
     } else {
       // Copy the first n-1 chunks to the output, and then create an array that fits the last chunk.
       // An alternative would have been returning an array of ByteBuffers, with the last buffer
@@ -119,9 +115,9 @@ public class ChunkedByteBufferOutputStream extends OutputStream {
         chunks.get(lastChunkIndex).flip();
         ret[lastChunkIndex].put(chunks.get(lastChunkIndex));
         ret[lastChunkIndex].flip();
-        ChunkedByteBuffer.dispose(chunks.get(lastChunkIndex));
+        ChunkedByteBufferUtil.dispose(chunks.get(lastChunkIndex));
       }
-      return new ChunkedByteBuffer(ret);
+      return ChunkedByteBufferUtil.wrap(ret);
     }
   }
 }
