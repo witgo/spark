@@ -277,7 +277,9 @@ private[spark] class BlockManager(
     if (blockId.isShuffle) {
       shuffleManager.shuffleBlockResolver.getBlockData(blockId.asInstanceOf[ShuffleBlockId])
     } else {
-      getLocalBytes(blockId) match {
+      blockInfoManager.lockForReading(blockId).map { info =>
+        doGetLocalData(blockId, info)
+      } match {
         case Some(buffer) => new BlockManagerManagedBuffer(blockInfoManager, blockId, buffer)
         case None => throw new BlockNotFoundException(blockId.toString)
       }
@@ -292,7 +294,8 @@ private[spark] class BlockManager(
       data: ManagedBuffer,
       level: StorageLevel,
       classTag: ClassTag[_]): Boolean = {
-    putBytes(blockId, data.nioByteBuffer(), level)(classTag)
+    require(data != null, "data is null")
+    doPutData(blockId, data, level, classTag)
   }
 
   /**
@@ -436,16 +439,15 @@ private[spark] class BlockManager(
           Some(new BlockResult(ci, DataReadMethod.Memory, info.size))
         } else if (level.useDisk && diskStore.contains(blockId)) {
           val iterToReturn: Iterator[Any] = {
-            val diskBytes = diskStore.getBytes(blockId)
+            val diskBytes = diskStore.getBlockData(blockId)
             if (level.deserialized) {
               val diskValues = serializerManager.dataDeserializeStream(
-                blockId,
-                diskBytes.toInputStream(true))(info.classTag)
+                blockId, diskBytes.createInputStream())(info.classTag)
               maybeCacheDiskValuesInMemory(info, blockId, level, diskValues)
             } else {
-              val stream = maybeCacheDiskBytesInMemory(info, blockId, level, diskBytes)
+              val stream = maybeCacheDiskDataInMemory(info, blockId, level, diskBytes)
                 .map {_.toInputStream(false)}
-                .getOrElse { diskBytes.toInputStream( true) }
+                .getOrElse { diskBytes.createInputStream() }
               serializerManager.dataDeserializeStream(blockId, stream)(info.classTag)
             }
           }
@@ -471,7 +473,9 @@ private[spark] class BlockManager(
       Option(
         shuffleBlockResolver.getBlockData(blockId.asInstanceOf[ShuffleBlockId]).nioByteBuffer())
     } else {
-      blockInfoManager.lockForReading(blockId).map { info => doGetLocalBytes(blockId, info) }
+      blockInfoManager.lockForReading(blockId).map { info =>
+        doGetLocalData(blockId, info).nioByteBuffer()
+      }
     }
   }
 
@@ -481,7 +485,7 @@ private[spark] class BlockManager(
    * Must be called while holding a read lock on the block.
    * Releases the read lock upon exception; keeps the read lock upon successful return.
    */
-  private def doGetLocalBytes(blockId: BlockId, info: BlockInfo): ChunkedByteBuffer = {
+  private def doGetLocalData(blockId: BlockId, info: BlockInfo): ManagedBuffer = {
     val level = info.level
     logDebug(s"Level for block $blockId is $level")
     // In order, try to read the serialized bytes from memory, then from disk, then fall back to
@@ -493,20 +497,24 @@ private[spark] class BlockManager(
         // handles deserialized blocks, this block may only be cached in memory as objects, not
         // serialized bytes. Because the caller only requested bytes, it doesn't make sense to
         // cache the block's deserialized objects since that caching may not have a payoff.
-        diskStore.getBytes(blockId)
+        diskStore.getBlockData(blockId)
       } else if (level.useMemory && memoryStore.contains(blockId)) {
         // The block was not found on disk, so serialize an in-memory copy:
-        serializerManager.dataSerializeWithExplicitClassTag(
+        val buffer = serializerManager.dataSerializeWithExplicitClassTag(
           blockId, memoryStore.getValues(blockId).get, info.classTag)
+        new NioManagedBuffer(buffer)
       } else {
         handleLocalReadFailure(blockId)
       }
     } else {  // storage level is serialized
       if (level.useMemory && memoryStore.contains(blockId)) {
-        memoryStore.getBytes(blockId).get
+        val buffer = memoryStore.getBytes(blockId).get
+        new NioManagedBuffer(buffer)
       } else if (level.useDisk && diskStore.contains(blockId)) {
-        val diskBytes = diskStore.getBytes(blockId)
-        maybeCacheDiskBytesInMemory(info, blockId, level, diskBytes).getOrElse(diskBytes)
+        val diskBytes = diskStore.getBlockData(blockId)
+        maybeCacheDiskDataInMemory(info, blockId, level, diskBytes).map { buffer =>
+          new NioManagedBuffer(buffer)
+        }.getOrElse(diskBytes)
       } else {
         handleLocalReadFailure(blockId)
       }
@@ -520,9 +528,9 @@ private[spark] class BlockManager(
    */
   private def getRemoteValues(blockId: BlockId): Option[BlockResult] = {
     getRemoteBytes(blockId).map { data =>
-      val values =
-        serializerManager.dataDeserializeStream(blockId, data.toInputStream(true))
-      new BlockResult(values, DataReadMethod.Network, data.size)
+      val values = serializerManager.dataDeserializeStream(blockId, data.createInputStream())
+      new BlockResult(CompletionIterator(values, data.release()),
+        DataReadMethod.Network, data.size)
     }
   }
 
@@ -539,7 +547,7 @@ private[spark] class BlockManager(
   /**
    * Get block from remote block managers as serialized bytes.
    */
-  def getRemoteBytes(blockId: BlockId): Option[ChunkedByteBuffer] = {
+  def getRemoteBytes(blockId: BlockId): Option[ManagedBuffer] = {
     logDebug(s"Getting remote block $blockId")
     require(blockId != null, "BlockId is null")
     var runningFailureCount = 0
@@ -551,8 +559,34 @@ private[spark] class BlockManager(
       val loc = locationIterator.next()
       logDebug(s"Getting remote block $blockId from $loc")
       val data = try {
-        blockTransferService.fetchBlockSync(
-          loc.host, loc.port, loc.executorId, blockId.toString).nioByteBuffer()
+        val managedBuffer = blockTransferService.fetchBlockSync(
+          loc.host, loc.port, loc.executorId, blockId.toString)
+        val dataSize = managedBuffer.size()
+        val success = memoryManager.acquireUnrollMemory(blockId,
+          managedBuffer.size(), MemoryMode.ON_HEAP)
+        if (success) {
+          val chunkSize = math.min(dataSize, 32 * 1024).toInt
+          val out = new ChunkedByteBufferOutputStream(chunkSize)
+          try {
+            Utils.copyStream(managedBuffer.createInputStream(), out, closeStreams = true)
+            if (out.size() != dataSize) {
+              throw new SparkException(s"buffer size ${out.size()} but expected $dataSize")
+            }
+          } finally {
+            managedBuffer.release()
+          }
+          new ReferenceCountedManagedBuffer(out.toChunkedByteBuffer, () =>
+            memoryManager.releaseUnrollMemory(managedBuffer.size(), MemoryMode.ON_HEAP))
+        } else {
+          val (tempLocalBlockId, _) = diskBlockManager.createTempLocalBlock()
+          diskStore.put(tempLocalBlockId) { fileOutputStream =>
+            val inputStream = managedBuffer.createInputStream()
+            Utils.copyStream(inputStream, fileOutputStream)
+            inputStream.close()
+          }
+          val onDeallocate: () => Unit = () => diskStore.remove(tempLocalBlockId)
+          new ReferenceCountedManagedBuffer(diskStore.getBlockData(tempLocalBlockId), onDeallocate)
+        }
       } catch {
         case NonFatal(e) =>
           runningFailureCount += 1
@@ -737,7 +771,7 @@ private[spark] class BlockManager(
       level: StorageLevel,
       tellMaster: Boolean = true): Boolean = {
     require(bytes != null, "Bytes is null")
-    doPutBytes(blockId, bytes, level, implicitly[ClassTag[T]], tellMaster)
+    doPutData(blockId, new NioManagedBuffer(bytes), level, implicitly[ClassTag[T]], tellMaster)
   }
 
   /**
@@ -751,9 +785,9 @@ private[spark] class BlockManager(
    *                     returns.
    * @return true if the block was already present or if the put succeeded, false otherwise.
    */
-  private def doPutBytes[T](
+  private def doPutData[T](
       blockId: BlockId,
-      bytes: ChunkedByteBuffer,
+      bytes: ManagedBuffer,
       level: StorageLevel,
       classTag: ClassTag[T],
       tellMaster: Boolean = true,
@@ -779,7 +813,7 @@ private[spark] class BlockManager(
         // We will drop it to disk later if the memory store can't hold it.
         val putSucceeded = if (level.deserialized) {
           val values =
-            serializerManager.dataDeserializeStream(blockId, bytes.toInputStream())(classTag)
+            serializerManager.dataDeserializeStream(blockId, bytes.createInputStream())(classTag)
           memoryStore.putIteratorAsValues(blockId, values, classTag) match {
             case Right(_) => true
             case Left(iter) =>
@@ -789,14 +823,22 @@ private[spark] class BlockManager(
               false
           }
         } else {
-          memoryStore.putBytes(blockId, size, level.memoryMode, () => bytes)
+          memoryStore.putBytes(blockId, size, level.memoryMode, () => bytes.nioByteBuffer())
         }
         if (!putSucceeded && level.useDisk) {
           logWarning(s"Persisting block $blockId to disk instead.")
-          diskStore.putBytes(blockId, bytes)
+          diskStore.put(blockId) { fileOutputStream =>
+            val inputStream = bytes.createInputStream()
+            Utils.copyStream(inputStream, fileOutputStream)
+            inputStream.close()
+          }
         }
       } else if (level.useDisk) {
-        diskStore.putBytes(blockId, bytes)
+        diskStore.put(blockId) { fileOutputStream =>
+          val inputStream = bytes.createInputStream()
+          Utils.copyStream(inputStream, fileOutputStream)
+          inputStream.close()
+        }
       }
 
       val putBlockStatus = getCurrentBlockStatus(blockId, info)
@@ -831,7 +873,7 @@ private[spark] class BlockManager(
   }
 
   /**
-   * Helper method used to abstract common code from [[doPutBytes()]] and [[doPutIterator()]].
+   * Helper method used to abstract common code from [[doPutData()]] and [[doPutIterator()]].
    *
    * @param putBody a function which attempts the actual put() and returns None on success
    *                or Some on failure.
@@ -971,7 +1013,7 @@ private[spark] class BlockManager(
         logDebug("Put block %s locally took %s".format(blockId, Utils.getUsedTimeMs(startTimeMs)))
         if (level.replication > 1) {
           val remoteStartTime = System.currentTimeMillis
-          val bytesToReplicate = doGetLocalBytes(blockId, info).retain()
+          val bytesToReplicate = doGetLocalData(blockId, info).retain()
           // [SPARK-16550] Erase the typed classTag when using default serialization, since
           // NettyBlockRpcServer crashes when deserializing repl-defined classes.
           // TODO(ekl) remove this once the classloader issue on the remote end is fixed.
@@ -1003,11 +1045,11 @@ private[spark] class BlockManager(
    *         automatically be disposed and the caller should not continue to use them. Otherwise,
    *         if this returns None then the original disk store bytes will be unaffected.
    */
-  private def maybeCacheDiskBytesInMemory(
-      blockInfo: BlockInfo,
-      blockId: BlockId,
-      level: StorageLevel,
-      diskBytes: ChunkedByteBuffer): Option[ChunkedByteBuffer] = {
+  private def maybeCacheDiskDataInMemory(
+    blockInfo: BlockInfo,
+    blockId: BlockId,
+    level: StorageLevel,
+    diskBytes: ManagedBuffer): Option[ChunkedByteBuffer] = {
     require(!level.deserialized)
     if (level.useMemory) {
       // Synchronize on blockInfo to guard against a race condition where two readers both try to
@@ -1029,7 +1071,7 @@ private[spark] class BlockManager(
             val out = new ChunkedByteBufferOutputStream(32 * 1024, new Allocator {
               override def allocate(len: Int) = allocator(len)
             })
-            Utils.copyStream(diskBytes.toInputStream(), out, true)
+            Utils.copyStream(diskBytes.createInputStream(), out, true)
             out.toChunkedByteBuffer
           })
           if (putSucceeded) {
@@ -1104,7 +1146,7 @@ private[spark] class BlockManager(
    */
   private def replicate(
       blockId: BlockId,
-      data: ChunkedByteBuffer,
+      data: ManagedBuffer,
       level: StorageLevel,
       classTag: ClassTag[_]): Unit = {
     val maxReplicationFailures = conf.getInt("spark.storage.maxReplicationFailures", 1)
@@ -1170,7 +1212,7 @@ private[spark] class BlockManager(
               peer.port,
               peer.executorId,
               blockId,
-              new NettyManagedBuffer(data.toNetty),
+              data,
               tLevel,
               classTag)
             logTrace(s"Replicated $blockId of ${data.size} bytes to $peer in %s ms"

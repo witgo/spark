@@ -17,10 +17,14 @@
 
 package org.apache.spark.network.server;
 
+import java.io.InputStream;
+
 import com.google.common.base.Throwables;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelFuture;
 import io.netty.channel.ChannelFutureListener;
+import org.apache.spark.network.client.InputStreamInterceptor;
+import org.apache.spark.network.util.TransportFrameDecoder;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -154,7 +158,19 @@ public class TransportRequestHandler extends MessageHandler<RequestMessage> {
 
   private void processRpcRequest(final RpcRequest req) {
     try {
-      rpcHandler.receive(reverseClient, req.body().createInputStream(), new RpcResponseCallback() {
+      InputStream inputStream;
+      if (req.isBodyInFrame()) {
+        inputStream = req.body().createInputStream();
+      } else {
+        InputStreamInterceptor inputStreamInterceptor = new InputStreamInterceptor(channel,
+            req.bodySize, InputStreamInterceptor.emptyInputStreamCallback);
+        TransportFrameDecoder frameDecoder = (TransportFrameDecoder)
+            channel.pipeline().get(TransportFrameDecoder.HANDLER_NAME);
+        frameDecoder.setInterceptor(inputStreamInterceptor.interceptor);
+        inputStream = inputStreamInterceptor;
+      }
+
+      rpcHandler.receive(reverseClient, inputStream , new RpcResponseCallback() {
         @Override
         public void onSuccess(ChunkedByteBuffer response) {
           respond(new RpcResponse(req.requestId, new NioManagedBuffer(response)));
@@ -169,7 +185,7 @@ public class TransportRequestHandler extends MessageHandler<RequestMessage> {
       logger.error("Error while invoking RpcHandler#receive() on RPC id " + req.requestId, e);
       respond(new RpcFailure(req.requestId, Throwables.getStackTraceAsString(e)));
     } finally {
-      req.body().release();
+      if (req.isBodyInFrame()) req.body().release();
     }
   }
 

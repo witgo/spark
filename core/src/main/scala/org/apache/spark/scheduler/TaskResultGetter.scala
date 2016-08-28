@@ -84,7 +84,8 @@ private[spark] class TaskResultGetter(sparkEnv: SparkEnv, scheduler: TaskSchedul
                 return
               }
               val deserializedResult = serializer.get().deserialize[DirectTaskResult[_]](
-                serializedTaskResult.get)
+                serializedTaskResult.get.createInputStream())
+              serializedTaskResult.get.release()
               sparkEnv.blockManager.master.removeBlock(blockId)
               (deserializedResult, size.toLong)
           }

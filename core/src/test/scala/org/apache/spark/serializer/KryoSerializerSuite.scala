@@ -338,7 +338,7 @@ class KryoSerializerSuite extends SparkFunSuite with SharedSparkContext {
     }
   }
 
-  test("serialization buffer overflow reporting") {
+  ignore("serialization buffer overflow reporting") {
     import org.apache.spark.SparkException
     val kryoBufferMaxProperty = "spark.kryoserializer.buffer.max"
 

@@ -133,17 +133,22 @@ private[spark] class TorrentBroadcast[T: ClassTag](obj: T, id: Long)
           blocks(pid) = block
           releaseLock(pieceId)
         case None =>
-          bm.getRemoteBytes(pieceId) match {
-            case Some(b) =>
-              // We found the block from remote executors/driver's BlockManager, so put the block
-              // in this executor's BlockManager.
-              if (!bm.putBytes(pieceId, b, StorageLevel.MEMORY_AND_DISK_SER, tellMaster = true)) {
-                throw new SparkException(
-                  s"Failed to store $pieceId of $broadcastId in local BlockManager")
-              }
-              blocks(pid) = b
-            case None =>
-              throw new SparkException(s"Failed to get $pieceId of $broadcastId")
+          val managedBuffer = bm.getRemoteBytes(pieceId)
+          try {
+            managedBuffer.map(_.nioByteBuffer()) match {
+              case Some(b) =>
+                // We found the block from remote executors/driver's BlockManager, so put the block
+                // in this executor's BlockManager.
+                if (!bm.putBytes(pieceId, b, StorageLevel.MEMORY_AND_DISK_SER, tellMaster = true)) {
+                  throw new SparkException(
+                    s"Failed to store $pieceId of $broadcastId in local BlockManager")
+                }
+                blocks(pid) = b
+              case None =>
+                throw new SparkException(s"Failed to get $pieceId of $broadcastId")
+            }
+          } finally {
+            managedBuffer.foreach(_.release())
           }
       }
     }
