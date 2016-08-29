@@ -743,7 +743,7 @@ private[storage] class PartiallySerializedBlock[T](
     taskContext.addTaskCompletionListener { _ =>
       // When a task completes, its unroll memory will automatically be freed. Thus we do not call
       // releaseUnrollMemoryForThisTask() here because we want to avoid double-freeing.
-      unrolled.release()
+      if (unrolled.refCnt() > 0) unrolled.release()
     }
   }
 
@@ -769,7 +769,7 @@ private[storage] class PartiallySerializedBlock[T](
    */
   def finishWritingToStream(os: OutputStream): Unit = {
     // `unrolled`'s underlying buffers will be freed once this input stream is fully read:
-    ByteStreams.copy(unrolled.toInputStream(true), os)
+    ByteStreams.copy(unrolled.toInputStream(), os)
     memoryStore.releaseUnrollMemoryForThisTask(memoryMode, unrollMemory)
     redirectableOutputStream.setOutputStream(os)
     while (rest.hasNext) {
@@ -788,7 +788,7 @@ private[storage] class PartiallySerializedBlock[T](
   def valuesIterator: PartiallyUnrolledIterator[T] = {
     // `unrolled`'s underlying buffers will be freed once this input stream is fully read:
     val unrolledIter = serializerManager.dataDeserializeStream(
-      blockId, unrolled.toInputStream(true))(classTag)
+      blockId, unrolled.toInputStream())(classTag)
     new PartiallyUnrolledIterator(
       memoryStore,
       unrollMemory,

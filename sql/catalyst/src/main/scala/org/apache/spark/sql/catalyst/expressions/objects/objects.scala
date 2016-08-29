@@ -825,7 +825,7 @@ case class DecodeUsingSerializer[T](child: Expression, tag: ClassTag[T], kryo: B
 
     // Code to deserialize.
     val input = child.genCode(ctx)
-    val byteBuffer = s"org.apache.spark.network.buffer.ChunkedByteBuffer.wrap(${input.value})"
+    val byteBuffer = s"org.apache.spark.network.buffer.ChunkedByteBufferUtil.wrap(${input.value})"
     val javaType = ctx.javaType(dataType)
     val deserialize =
       s"($javaType) $serializer.deserialize($byteBuffer, null)"
