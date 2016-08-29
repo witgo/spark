@@ -25,6 +25,7 @@ import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.atomic.AtomicIntegerFieldUpdater;
 import java.util.concurrent.atomic.AtomicReferenceFieldUpdater;
 
+import com.google.common.base.Preconditions;
 import com.google.common.primitives.UnsignedBytes;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.EmptyByteBuf;
@@ -132,6 +133,10 @@ public class InputStreamInterceptor extends InputStream {
   public void close() throws IOException {
     for (; ; ) {
       if (closedUpdater.compareAndSet(this, 0, 1)) {
+        if (logger.isTraceEnabled()) {
+          logger.trace("Closed remoteAddress: " + channel.remoteAddress() +
+              ", readerIndex: " + readerIndex + ", byteCount: " + byteCount);
+        }
         releaseCurChunk();
         resetChannel();
         Iterator<ByteBuf> itr = buffers.iterator();
@@ -146,8 +151,8 @@ public class InputStreamInterceptor extends InputStream {
 
   private void pullChunk() throws IOException {
     if (logger.isTraceEnabled()) {
-      logger.trace("remoteAddress: " + channel.remoteAddress() +
-          ", readerIndex: " + readerIndex + ", bodySize: " + byteCount);
+      logger.trace("RemoteAddress: " + channel.remoteAddress() +
+          ", readerIndex: " + readerIndex + ", byteCount: " + byteCount);
     }
     if (readerIndex >= byteCount) {
       close();
@@ -162,7 +167,9 @@ public class InputStreamInterceptor extends InputStream {
 
         curChunk = buffers.take();
 
-        if (curChunk == emptyByteBuf) assert cause() != null;
+        if (curChunk == emptyByteBuf) {
+          Preconditions.checkNotNull(cause());
+        }
       } catch (Throwable e) {
         setCause(e);
       }
@@ -179,15 +186,18 @@ public class InputStreamInterceptor extends InputStream {
   }
 
   private void setCause(Throwable e) throws IOException {
+    if (logger.isTraceEnabled()) {
+      logger.trace("exceptionCaught", e);
+    }
     if (causeUpdater.compareAndSet(this, null, e)) {
       try {
         close();
         buffers.put(emptyByteBuf);
       } catch (Throwable throwable) {
+        logger.error("exceptionCaught", e);
         // setCause(throwable);
       }
     }
-
   }
 
   private void maybeReleaseCurChunk() {
@@ -221,18 +231,16 @@ public class InputStreamInterceptor extends InputStream {
   private class StreamInterceptor implements TransportFrameDecoder.Interceptor {
     @Override
     public void exceptionCaught(Throwable e) throws Exception {
-      callback.deactivateStream();
+      callback.onComplete();
       setCause(e);
-      logger.trace("exceptionCaught", e);
       onSuccess();
       resetChannel();
     }
 
     @Override
     public void channelInactive() throws Exception {
-      callback.deactivateStream();
+      callback.onComplete();
       setCause(new ClosedChannelException());
-      logger.trace("channelInactive", cause());
       onSuccess();
       resetChannel();
     }
@@ -243,22 +251,22 @@ public class InputStreamInterceptor extends InputStream {
         ByteBuf frame = nextBufferForFrame(byteCount - writerIndex, buf);
         int available = frame.readableBytes();
         writerIndex += available;
+        if (logger.isTraceEnabled()) {
+          logger.trace("RemoteAddress: " + channel.remoteAddress() +
+              ", writerIndex: " + writerIndex + ", byteCount: " + byteCount);
+        }
         mayTrafficSuspension();
         if (!isClosed() && available > 0) {
           buffers.put(frame);
           if (writerIndex > byteCount) {
             setCause(new IllegalStateException(String.format(
                 "Read too many bytes? Expected %d, but read %d.", byteCount, writerIndex)));
-            callback.deactivateStream();
+            callback.onComplete();
           } else if (writerIndex == byteCount) {
-            callback.deactivateStream();
+            callback.onComplete();
           }
         } else {
           frame.release();
-        }
-        if (logger.isTraceEnabled()) {
-          logger.trace("remoteAddress " + channel.remoteAddress() +
-              " writerIndex, " + writerIndex + " byteCount, " + byteCount);
         }
         onSuccess();
       } catch (Exception e) {
@@ -305,7 +313,7 @@ public class InputStreamInterceptor extends InputStream {
      */
     void onFailure(Throwable cause) throws IOException;
 
-    void deactivateStream();
+    void onComplete();
   }
 
   public static InputStreamCallback emptyInputStreamCallback = new InputStreamCallback() {
@@ -320,7 +328,7 @@ public class InputStreamInterceptor extends InputStream {
     }
 
     @Override
-    public void deactivateStream() {
+    public void onComplete() {
 
     }
   };

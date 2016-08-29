@@ -273,8 +273,8 @@ public class TransportResponseHandler extends MessageHandler<ResponseMessage> {
           }
 
           @Override
-          public void deactivateStream() {
-            this.deactivateStream();
+          public void onComplete() {
+            deactivateStream();
           }
         };
     InputStreamInterceptor inputStream =
