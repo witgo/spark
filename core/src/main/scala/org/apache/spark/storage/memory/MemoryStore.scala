@@ -26,6 +26,7 @@ import scala.collection.mutable.ArrayBuffer
 import scala.reflect.ClassTag
 
 import com.google.common.io.ByteStreams
+import io.netty.buffer.Unpooled
 
 import org.apache.spark.{SparkConf, TaskContext}
 import org.apache.spark.internal.Logging
@@ -327,7 +328,10 @@ private[spark] class MemoryStore(
     // Underlying buffer for unrolling the block
     val redirectableStream = new RedirectableOutputStream
     val bbos = new ChunkedByteBufferOutputStream(initialMemoryThreshold.toInt, new Allocator {
-      override def allocate(len: Int) = allocator(len)
+      override def allocate(len: Int) = {
+        val buf = Unpooled.wrappedBuffer(allocator(len))
+        buf.clear()
+      }
     })
     redirectableStream.setOutputStream(bbos)
     val serializationStream: SerializationStream = {

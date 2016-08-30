@@ -22,6 +22,7 @@ import java.nio.ByteBuffer;
 import java.util.ArrayList;
 
 import com.google.common.base.Preconditions;
+import io.netty.buffer.ByteBuf;
 
 public class ChunkedByteBufferOutputStream extends OutputStream {
 
@@ -29,14 +30,16 @@ public class ChunkedByteBufferOutputStream extends OutputStream {
   private final Allocator allocator;
   /**
    * Next position to write in the last chunk.
-   *
+   * <p>
    * If this equals chunkSize, it means for next write we need to allocate a new chunk.
    * This can also never be 0.
    */
   private int position;
 
-  private ArrayList<ByteBuffer> chunks = new ArrayList<ByteBuffer>();
-  /** Index of the last chunk. Starting with -1 when the chunks array is empty. */
+  private ArrayList<ByteBuf> chunks = new ArrayList<>();
+  /**
+   * Index of the last chunk. Starting with -1 when the chunks array is empty.
+   */
   private int lastChunkIndex = -1;
   private boolean toChunkedByteBufferWasCalled = false;
   private long _size = 0;
@@ -62,7 +65,7 @@ public class ChunkedByteBufferOutputStream extends OutputStream {
 
   public void write(int b) throws IOException {
     allocateNewChunkIfNeeded();
-    chunks.get(lastChunkIndex).put((byte) b);
+    chunks.get(lastChunkIndex).writeByte(b);
     position += 1;
     _size += 1;
   }
@@ -72,7 +75,7 @@ public class ChunkedByteBufferOutputStream extends OutputStream {
     while (written < len) {
       allocateNewChunkIfNeeded();
       int thisBatch = Math.min(chunkSize - position, len - written);
-      chunks.get(lastChunkIndex).put(bytes, written + off, thisBatch);
+      chunks.get(lastChunkIndex).writeBytes(bytes, off + written, thisBatch);
       written += thisBatch;
       position += thisBatch;
     }
@@ -101,22 +104,19 @@ public class ChunkedByteBufferOutputStream extends OutputStream {
       // bounded to only the last chunk's position. However, given our use case in Spark (to put
       // the chunks in block manager), only limiting the view bound of the buffer would still
       // require the block manager to store the whole chunk.
-      ByteBuffer[] ret = new ByteBuffer[chunks.size()];
+      ByteBuf[] ret = new ByteBuf[chunks.size()];
       for (int i = 0; i < chunks.size() - 1; i++) {
         ret[i] = chunks.get(i);
-        ret[i].flip();
       }
 
       if (position == chunkSize) {
         ret[lastChunkIndex] = chunks.get(lastChunkIndex);
-        ret[lastChunkIndex].flip();
       } else {
         ret[lastChunkIndex] = allocator.allocate(position);
-        chunks.get(lastChunkIndex).flip();
-        ret[lastChunkIndex].put(chunks.get(lastChunkIndex));
-        ret[lastChunkIndex].flip();
-        ChunkedByteBufferUtil.dispose(chunks.get(lastChunkIndex));
+        ret[lastChunkIndex].writeBytes(chunks.get(lastChunkIndex));
+        chunks.get(lastChunkIndex).release();
       }
+
       return ChunkedByteBufferUtil.wrap(ret);
     }
   }

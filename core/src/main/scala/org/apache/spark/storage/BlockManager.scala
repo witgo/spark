@@ -27,6 +27,8 @@ import scala.reflect.ClassTag
 import scala.util.Random
 import scala.util.control.NonFatal
 
+import io.netty.buffer.Unpooled
+
 import org.apache.spark._
 import org.apache.spark.executor.{DataReadMethod, ShuffleWriteMetrics}
 import org.apache.spark.internal.Logging
@@ -1069,7 +1071,10 @@ private[spark] class BlockManager(
             // cannot put it into MemoryStore, copyForMemory should not be created. That's why
             // this action is put into a `() => ChunkedByteBuffer` and created lazily.
             val out = new ChunkedByteBufferOutputStream(32 * 1024, new Allocator {
-              override def allocate(len: Int) = allocator(len)
+              override def allocate(len: Int) = {
+                val buf = Unpooled.wrappedBuffer(allocator(len))
+                buf.clear()
+              }
             })
             Utils.copyStream(diskBytes.createInputStream(), out, true)
             out.toChunkedByteBuffer

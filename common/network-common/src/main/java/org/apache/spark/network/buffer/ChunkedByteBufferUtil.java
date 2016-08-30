@@ -22,6 +22,11 @@ import java.nio.ByteBuffer;
 import java.nio.MappedByteBuffer;
 
 import com.google.common.io.ByteStreams;
+import io.netty.buffer.ByteBuf;
+import io.netty.buffer.PooledByteBufAllocator;
+import io.netty.buffer.Unpooled;
+import io.netty.buffer.UnpooledByteBufAllocator;
+import io.netty.util.ResourceLeakDetector;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import sun.nio.ch.DirectBuffer;
@@ -40,17 +45,31 @@ public class ChunkedByteBufferUtil {
   }
 
   public static ChunkedByteBuffer wrap() {
-    return new ChunkedByteBufferImpl();
+    return new ChunkedByteBufImpl();
   }
 
   public static ChunkedByteBuffer wrap(ByteBuffer chunk) {
-    ByteBuffer[] chunks = new ByteBuffer[1];
-    chunks[0] = chunk;
-    return new ChunkedByteBufferImpl(chunks);
+    ByteBuf[] chunks = new ByteBuf[1];
+    chunks[0] = Unpooled.wrappedBuffer(chunk);
+    return new ChunkedByteBufImpl(chunks);
+  }
+
+  public static ChunkedByteBuffer wrap(ByteBuf chunk) {
+    ByteBuf[] chunks = new ByteBuf[1];
+    chunks[0] = Unpooled.wrappedBuffer(chunk);
+    return wrap(chunks);
   }
 
   public static ChunkedByteBuffer wrap(ByteBuffer[] chunks) {
-    return new ChunkedByteBufferImpl(chunks);
+    ByteBuf[] byteBufs = new ByteBuf[chunks.length];
+    for (int i = 0; i < chunks.length; i++) {
+      byteBufs[i] = Unpooled.wrappedBuffer(chunks[i]);
+    }
+    return wrap(byteBufs);
+  }
+
+  public static ChunkedByteBuffer wrap(ByteBuf[] chunks) {
+    return new ChunkedByteBufImpl(chunks);
   }
 
   public static ChunkedByteBuffer wrap(byte[] array) {
@@ -70,12 +89,11 @@ public class ChunkedByteBufferUtil {
       byte[] bytes, int off, int len, int chunkSize, Allocator allocator) {
     assert bytes.length >= off + len;
     int numChunk = (int) Math.ceil(((double) len) / chunkSize);
-    ByteBuffer[] chunks = new ByteBuffer[numChunk];
+    ByteBuf[] chunks = new ByteBuf[numChunk];
     for (int i = 0; i < numChunk; i++) {
       int bufLen = Math.min(len, chunkSize);
-      ByteBuffer chunk = allocator.allocate(bufLen);
-      chunk.put(bytes, off, bufLen);
-      chunk.flip();
+      ByteBuf chunk = allocator.allocate(bufLen);
+      chunk.writeBytes(bytes, off, bufLen);
       chunks[i] = chunk;
       off += bufLen;
       len -= bufLen;
@@ -90,6 +108,10 @@ public class ChunkedByteBufferUtil {
     return out.toChunkedByteBuffer();
   }
 
+  public static ChunkedByteBuffer wrap(InputStream in) throws IOException {
+    return wrap(in, 32 * 1024);
+  }
+
   public static ChunkedByteBuffer allocate(int capacity) {
     return allocate(capacity, ChunkedByteBufferUtil.DEFAULT_ALLOCATOR);
   }
@@ -100,8 +122,14 @@ public class ChunkedByteBufferUtil {
 
   public static Allocator DEFAULT_ALLOCATOR = new Allocator() {
     @Override
-    public ByteBuffer allocate(int len) {
-      return ByteBuffer.allocate(len);
+    public ByteBuf allocate(int len) {
+      ByteBuf byteBuf = Unpooled.wrappedBuffer(ByteBuffer.allocate(len));
+      byteBuf.clear();
+      return byteBuf;
+//  if (ResourceLeakDetector.getLevel() != ResourceLeakDetector.Level.ADVANCED) {
+//    ResourceLeakDetector.setLevel(ResourceLeakDetector.Level.ADVANCED);
+//  }
+//  return PooledByteBufAllocator.DEFAULT.heapBuffer(len, len);
     }
   };
 }

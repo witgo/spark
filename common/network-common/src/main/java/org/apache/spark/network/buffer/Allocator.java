@@ -17,8 +17,8 @@
 
 package org.apache.spark.network.buffer;
 
-import java.nio.ByteBuffer;
+import io.netty.buffer.ByteBuf;
 
 public interface Allocator {
-  ByteBuffer allocate(int len);
+  ByteBuf allocate(int len);
 }

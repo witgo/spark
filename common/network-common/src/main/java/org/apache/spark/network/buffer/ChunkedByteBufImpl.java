@@ -36,14 +36,14 @@ import org.slf4j.LoggerFactory;
 import org.apache.spark.network.util.ByteArrayWritableChannel;
 import org.apache.spark.network.util.JavaUtils;
 
-public class ChunkedByteBufferImpl extends AbstractReferenceCounted implements ChunkedByteBuffer {
-  private static final Logger logger = LoggerFactory.getLogger(ChunkedByteBufferImpl.class);
+public class ChunkedByteBufImpl extends AbstractReferenceCounted implements ChunkedByteBuffer {
+  private static final Logger logger = LoggerFactory.getLogger(ChunkedByteBufImpl.class);
   private static final int BUF_SIZE = 0x1000; // 4K
-  private static final ByteBuffer[] emptyChunks = new ByteBuffer[0];
-  private ByteBuffer[] chunks = null;
+  private static final ByteBuf[] emptyChunks = new ByteBuf[0];
+  private ByteBuf[] chunks = null;
 
   // For deserialization only
-  public ChunkedByteBufferImpl() {
+  public ChunkedByteBufImpl() {
     this(emptyChunks);
   }
 
@@ -56,7 +56,7 @@ public class ChunkedByteBufferImpl extends AbstractReferenceCounted implements C
    *               buffers may also be used elsewhere then the caller is responsible for copying
    *               them as needed.
    */
-  public ChunkedByteBufferImpl(ByteBuffer[] chunks) {
+  public ChunkedByteBufImpl(ByteBuf[] chunks) {
     this.chunks = chunks;
     Preconditions.checkArgument(chunks != null, "chunks must not be null");
   }
@@ -67,16 +67,17 @@ public class ChunkedByteBufferImpl extends AbstractReferenceCounted implements C
     out.writeInt(chunks.length);
     byte[] buf = null;
     for (int i = 0; i < chunks.length; i++) {
-      ByteBuffer buffer = chunks[i].duplicate();
-      out.writeInt(buffer.remaining());
+      ByteBuf buffer = chunks[i].duplicate();
+      int length = buffer.readableBytes();
+      out.writeInt(length);
       if (buffer.hasArray()) {
-        out.write(buffer.array(), buffer.arrayOffset() + buffer.position(),
-            buffer.remaining());
+        out.write(buffer.array(), buffer.arrayOffset() + buffer.readerIndex(), length);
+        buffer.readerIndex(buffer.readerIndex() + length);
       } else {
         if (buf == null) buf = new byte[BUF_SIZE];
-        while (buffer.hasRemaining()) {
-          int r = Math.min(BUF_SIZE, buffer.remaining());
-          buffer.get(buf, 0, r);
+        while (buffer.isReadable()) {
+          int r = Math.min(BUF_SIZE, buffer.readableBytes());
+          buffer.readBytes(buf, 0, r);
           out.write(buf, 0, r);
         }
       }
@@ -85,12 +86,24 @@ public class ChunkedByteBufferImpl extends AbstractReferenceCounted implements C
 
   @Override
   public void readExternal(ObjectInput in) throws IOException, ClassNotFoundException {
-    ByteBuffer[] buffers = new ByteBuffer[in.readInt()];
+    ByteBuf[] buffers = new ByteBuf[in.readInt()];
+    byte[] buf = null;
     for (int i = 0; i < buffers.length; i++) {
       int length = in.readInt();
-      byte[] buffer = new byte[length];
-      in.readFully(buffer);
-      buffers[i] = ByteBuffer.wrap(buffer);
+      ByteBuf buffer = ChunkedByteBufferUtil.DEFAULT_ALLOCATOR.allocate(length);
+      if (buffer.hasArray()) {
+        in.readFully(buffer.array(), buffer.arrayOffset() + buffer.writerIndex(), length);
+        buffer.writerIndex(buffer.writerIndex() + length);
+      } else {
+        if (buf == null) buf = new byte[BUF_SIZE];
+        while (length > 0) {
+          int r = Math.min(BUF_SIZE, length);
+          in.readFully(buf, 0, r);
+          buffer.writeBytes(buf, 0, r);
+          length -= r;
+        }
+      }
+      buffers[i] = buffer;
     }
     this.chunks = buffers;
   }
@@ -105,7 +118,7 @@ public class ChunkedByteBufferImpl extends AbstractReferenceCounted implements C
     int i = 0;
     long sum = 0L;
     while (i < chunks.length) {
-      sum += chunks[i].remaining();
+      sum += chunks[i].readableBytes();
       i++;
     }
     return sum;
@@ -118,7 +131,7 @@ public class ChunkedByteBufferImpl extends AbstractReferenceCounted implements C
   public void writeFully(WritableByteChannel channel) throws IOException {
     ensureAccessible();
     for (int i = 0; i < chunks.length; i++) {
-      ByteBuffer bytes = chunks[i].duplicate();
+      ByteBuffer bytes = chunks[i].nioBuffer();
       while (bytes.remaining() > 0) {
         channel.write(bytes);
       }
@@ -147,7 +160,7 @@ public class ChunkedByteBufferImpl extends AbstractReferenceCounted implements C
     ensureAccessible();
     try {
       if (chunks.length == 1) {
-        return JavaUtils.bufferToArray(chunks[0]);
+        return JavaUtils.bufferToArray(chunks[0].nioBuffer());
       } else {
         long len = size();
         if (len >= Integer.MAX_VALUE) {
@@ -173,7 +186,7 @@ public class ChunkedByteBufferImpl extends AbstractReferenceCounted implements C
   public ByteBuffer toByteBuffer() {
     ensureAccessible();
     if (chunks.length == 1) {
-      return chunks[0].duplicate();
+      return chunks[0].nioBuffer();
     } else {
       return ByteBuffer.wrap(this.toArray());
     }
@@ -205,12 +218,13 @@ public class ChunkedByteBufferImpl extends AbstractReferenceCounted implements C
   @Override
   public ChunkedByteBuffer copy(Allocator allocator) {
     ensureAccessible();
-    ByteBuffer[] copiedChunks = new ByteBuffer[chunks.length];
+    ByteBuf[] copiedChunks = new ByteBuf[chunks.length];
     for (int i = 0; i < chunks.length; i++) {
-      ByteBuffer chunk = chunks[i].duplicate();
-      ByteBuffer newChunk = allocator.allocate(chunk.remaining());
-      newChunk.put(chunk);
-      newChunk.flip();
+      ByteBuf chunk = chunks[i].duplicate();
+
+      ByteBuf newChunk = allocator.allocate(chunk.readableBytes());
+      newChunk.writeBytes(chunk);
+
       copiedChunks[i] = newChunk;
     }
     return ChunkedByteBufferUtil.wrap(copiedChunks);
@@ -224,22 +238,9 @@ public class ChunkedByteBufferImpl extends AbstractReferenceCounted implements C
     ensureAccessible();
     ByteBuffer[] buffs = new ByteBuffer[chunks.length];
     for (int i = 0; i < chunks.length; i++) {
-      buffs[i] = chunks[i].duplicate();
+      buffs[i] = chunks[i].nioBuffer();
     }
     return buffs;
-  }
-
-  /**
-   * Attempt to clean up a ByteBuffer if it is memory-mapped. This uses an *unsafe* Sun API that
-   * might cause errors if one attempts to read from the unmapped buffer, but it's better than
-   * waiting for the GC to find it because that could lead to huge numbers of open files. There's
-   * unfortunately no standard API to do this.
-   */
-  @Override
-  protected void deallocate() {
-    for (int i = 0; i < chunks.length; i++) {
-      ChunkedByteBufferUtil.dispose(chunks[i]);
-    }
   }
 
   @Override
@@ -253,16 +254,16 @@ public class ChunkedByteBufferImpl extends AbstractReferenceCounted implements C
     if (length == 0) {
       return ChunkedByteBufferUtil.wrap();
     }
-    ArrayList<ByteBuffer> list = new ArrayList<>();
+    ArrayList<ByteBuf> list = new ArrayList<>();
     int i = 0;
     long sum = 0L;
     while (i < chunks.length && length > 0) {
-      long lastSum = sum + chunks[i].remaining();
+      long lastSum = sum + chunks[i].readableBytes();
       if (lastSum > offset) {
-        ByteBuffer buffer = chunks[i].duplicate();
-        int localLength = (int) Math.min(length, buffer.remaining());
-        if (localLength < buffer.remaining()) {
-          buffer.limit(buffer.position() + localLength);
+        ByteBuf buffer = chunks[i].duplicate();
+        int localLength = (int) Math.min(length, buffer.readableBytes());
+        if (localLength < buffer.readableBytes()) {
+          buffer.slice(0, localLength);
         }
         length -= localLength;
         list.add(buffer);
@@ -270,13 +271,17 @@ public class ChunkedByteBufferImpl extends AbstractReferenceCounted implements C
       sum = lastSum;
       i++;
     }
-    return new DerivedChunkedByteBuffer(list.toArray(new ByteBuffer[list.size()]), this);
+    return new DerivedChunkedByteBuffer(list.toArray(new ByteBuf[list.size()]), this);
   }
 
   @Override
   public ChunkedByteBuffer duplicate() {
     ensureAccessible();
-    return new DerivedChunkedByteBuffer(getChunks(), this);
+    ByteBuf[] buffs = new ByteBuf[chunks.length];
+    for (int i = 0; i < chunks.length; i++) {
+      buffs[i] = chunks[i].duplicate();
+    }
+    return new DerivedChunkedByteBuffer(buffs, this);
   }
 
   @Override
@@ -291,21 +296,18 @@ public class ChunkedByteBufferImpl extends AbstractReferenceCounted implements C
     return this;
   }
 
-//  @Override
-//  public int hashCode() {
-//    ensureAccessible();
-//    return Arrays.hashCode(getChunks());
-//  }
-//
-//  @Override
-//  public boolean equals(Object other) {
-//    ensureAccessible();
-//    if (other != null && other instanceof ChunkedByteBuffer) {
-//      ChunkedByteBuffer o = (ChunkedByteBuffer) other;
-//      return Objects.equal(getChunks(), o.getChunks());
-//    }
-//    return false;
-//  }
+  /**
+   * Attempt to clean up a ByteBuffer if it is memory-mapped. This uses an *unsafe* Sun API that
+   * might cause errors if one attempts to read from the unmapped buffer, but it's better than
+   * waiting for the GC to find it because that could lead to huge numbers of open files. There's
+   * unfortunately no standard API to do this.
+   */
+  @Override
+  protected void deallocate() {
+    for (int i = 0; i < chunks.length; i++) {
+      chunks[i].release();
+    }
+  }
 
   /**
    * Should be called by every method that tries to access the buffers content to check
@@ -313,5 +315,21 @@ public class ChunkedByteBufferImpl extends AbstractReferenceCounted implements C
    */
   protected final void ensureAccessible() {
     if (refCnt() == 0) throw new IllegalReferenceCountException(0);
+  }
+
+  @Override
+  public int hashCode() {
+    ensureAccessible();
+    return Arrays.hashCode(chunks);
+  }
+
+  @Override
+  public boolean equals(Object other) {
+    ensureAccessible();
+    if (other != null && other instanceof ChunkedByteBuffer) {
+      ChunkedByteBuffer o = (ChunkedByteBuffer) other;
+      return Objects.equal(chunks, chunks);
+    }
+    return false;
   }
 }
