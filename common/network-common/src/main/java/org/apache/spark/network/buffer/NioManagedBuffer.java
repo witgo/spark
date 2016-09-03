@@ -70,7 +70,7 @@ public class NioManagedBuffer extends ManagedBuffer {
 
   @Override
   protected void deallocate() {
-    buf.release();
+    // buf.release();
   }
 }
 

@@ -206,19 +206,20 @@ public class TransportRequestHandler extends MessageHandler<RequestMessage> {
    */
   private void respond(final Encodable result) {
     final SocketAddress remoteAddress = channel.remoteAddress();
+    final String msg = result.toString();
     channel.writeAndFlush(result).addListener(
-      new ChannelFutureListener() {
-        @Override
-        public void operationComplete(ChannelFuture future) throws Exception {
-          if (future.isSuccess()) {
-            logger.trace("Sent result {} to client {}", result, remoteAddress);
-          } else {
-            logger.error(String.format("Error sending result %s to %s; closing connection",
-              result, remoteAddress), future.cause());
-            channel.close();
+        new ChannelFutureListener() {
+          @Override
+          public void operationComplete(ChannelFuture future) throws Exception {
+            if (future.isSuccess()) {
+              logger.trace("Sent result {} to client {}", msg, remoteAddress);
+            } else {
+              logger.error(String.format("Error sending result %s to %s; closing connection",
+                  msg, remoteAddress), future.cause());
+              channel.close();
+            }
           }
         }
-      }
     );
   }
 }
