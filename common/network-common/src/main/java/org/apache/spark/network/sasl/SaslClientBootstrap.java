@@ -18,12 +18,9 @@
 package org.apache.spark.network.sasl;
 
 import java.io.IOException;
-import java.nio.ByteBuffer;
 import javax.security.sasl.Sasl;
 import javax.security.sasl.SaslException;
 
-import io.netty.buffer.ByteBuf;
-import io.netty.buffer.Unpooled;
 import io.netty.channel.Channel;
 import org.apache.spark.network.buffer.ChunkedByteBuffer;
 import org.apache.spark.network.buffer.ChunkedByteBufferOutputStream;
@@ -32,7 +29,6 @@ import org.slf4j.LoggerFactory;
 
 import org.apache.spark.network.client.TransportClient;
 import org.apache.spark.network.client.TransportClientBootstrap;
-import org.apache.spark.network.util.JavaUtils;
 import org.apache.spark.network.util.TransportConf;
 
 /**
@@ -75,7 +71,7 @@ public class SaslClientBootstrap implements TransportClientBootstrap {
 
       while (!saslClient.isComplete()) {
         SaslMessage msg = new SaslMessage(appId, payload);
-        ChunkedByteBufferOutputStream outputStream= new ChunkedByteBufferOutputStream(32 * 1024);
+        ChunkedByteBufferOutputStream outputStream = ChunkedByteBufferOutputStream.newInstance();
         msg.encode(outputStream);
         outputStream.write(msg.body().nioByteBuffer().toArray());
         outputStream.close();

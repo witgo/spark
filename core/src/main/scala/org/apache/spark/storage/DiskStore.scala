@@ -72,11 +72,10 @@ private[spark] class DiskStore(conf: SparkConf, diskManager: DiskBlockManager) e
 
   def putBytes(blockId: BlockId, bytes: ChunkedByteBuffer): Unit = {
     put(blockId) { fileOutputStream =>
-      val channel = fileOutputStream.getChannel
       Utils.tryWithSafeFinally {
-        bytes.writeFully(channel)
+        bytes.writeFully(fileOutputStream)
       } {
-        channel.close()
+        fileOutputStream.close()
       }
     }
   }

@@ -295,7 +295,7 @@ private[spark] class KryoSerializerInstance(ks: KryoSerializer) extends Serializ
 
   override def serialize[T: ClassTag](t: T): ChunkedByteBuffer = {
     output.clear()
-    val out = new ChunkedByteBufferOutputStream(32 * 1024)
+    val out = ChunkedByteBufferOutputStream.newInstance()
     output.setOutputStream(out)
     val kryo = borrowKryo()
     try {

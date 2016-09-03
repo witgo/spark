@@ -23,7 +23,7 @@ import scala.reflect.ClassTag
 
 import org.apache.spark.SparkConf
 import org.apache.spark.annotation.DeveloperApi
-import org.apache.spark.network.buffer.{ChunkedByteBuffer, ChunkedByteBufferOutputStream, ChunkedByteBufferUtil}
+import org.apache.spark.network.buffer.{ChunkedByteBuffer, ChunkedByteBufferOutputStream}
 import org.apache.spark.util.Utils
 
 private[spark] class JavaSerializationStream(
@@ -95,7 +95,7 @@ private[spark] class JavaSerializerInstance(
   extends SerializerInstance {
 
   override def serialize[T: ClassTag](t: T): ChunkedByteBuffer = {
-    val bos = new ChunkedByteBufferOutputStream(32 * 1024, ChunkedByteBufferUtil.DEFAULT_ALLOCATOR)
+    val bos = ChunkedByteBufferOutputStream.newInstance()
     val out = serializeStream(bos)
     out.writeObject(t)
     out.close()

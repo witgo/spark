@@ -30,12 +30,18 @@ import org.slf4j.LoggerFactory;
 public class ByteBufInputStream extends InputStream {
   // private final Logger logger = LoggerFactory.getLogger(ByteBufInputStream.class);
 
+  private final boolean dispose;
   private final LinkedList<ByteBuf> buffers;
   private ByteBuf curChunk;
   private boolean isClosed = false;
 
   public ByteBufInputStream(LinkedList<ByteBuf> buffers) {
+    this(buffers, true);
+  }
+
+  public ByteBufInputStream(LinkedList<ByteBuf> buffers, boolean dispose) {
     this.buffers = buffers;
+    this.dispose = dispose;
   }
 
   @Override
@@ -81,8 +87,12 @@ public class ByteBufInputStream extends InputStream {
     if (isClosed) return;
     isClosed = true;
     releaseCurChunk();
-    while (buffers.size() > 0) {
-      buffers.removeFirst().release();
+    if (dispose) {
+      while (buffers.size() > 0) {
+        buffers.removeFirst().release();
+      }
+    } else {
+      buffers.clear();
     }
   }
 
@@ -98,7 +108,7 @@ public class ByteBufInputStream extends InputStream {
 
   private void releaseCurChunk() {
     if (curChunk != null) {
-      curChunk.release();
+      if (dispose) curChunk.release();
       curChunk = null;
     }
   }

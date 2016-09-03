@@ -18,7 +18,6 @@
 package org.apache.spark.scheduler
 
 import java.io.{DataInputStream, DataOutputStream}
-import java.nio.ByteBuffer
 import java.util.Properties
 
 import scala.collection.mutable
@@ -28,9 +27,9 @@ import org.apache.spark._
 import org.apache.spark.executor.TaskMetrics
 import org.apache.spark.memory.{MemoryMode, TaskMemoryManager}
 import org.apache.spark.metrics.MetricsSystem
-import org.apache.spark.network.buffer.{ChunkedByteBuffer, ChunkedByteBufferOutputStream}
+import org.apache.spark.network.buffer.{ChunkedByteBuffer, ChunkedByteBufferOutputStream, ChunkedByteBufferUtil}
 import org.apache.spark.serializer.SerializerInstance
-import org.apache.spark.util.{AccumulatorV2, ByteBufferInputStream, ByteBufferOutputStream, Utils}
+import org.apache.spark.util.{AccumulatorV2, Utils}
 
 /**
  * A unit of execution. We have two kinds of Task's in Spark:
@@ -205,7 +204,7 @@ private[spark] object Task {
       serializer: SerializerInstance)
     : ChunkedByteBuffer = {
 
-    val out = new ChunkedByteBufferOutputStream(4 * 1024)
+    val out = ChunkedByteBufferOutputStream.newInstance()
     val dataOut = new DataOutputStream(out)
 
     // Write currentFiles
@@ -267,7 +266,7 @@ private[spark] object Task {
     val taskProps = Utils.deserialize[Properties](propBytes)
 
     // Create a sub-buffer for the rest of the data, which is the serialized Task object
-    val subBuffer = in.toChunkedByteBuffer
+    val subBuffer = ChunkedByteBufferUtil.wrap(in)
     (taskFiles, taskJars, taskProps, subBuffer)
   }
 }

@@ -19,6 +19,8 @@ package org.apache.spark.storage
 
 import java.io.InputStream
 
+import com.google.common.base.Objects
+
 import org.apache.spark.network.buffer.{ChunkedByteBuffer, ManagedBuffer, NettyManagedBuffer}
 
 private[storage] class ReferenceCountedManagedBuffer(
@@ -57,5 +59,9 @@ private[storage] class ReferenceCountedManagedBuffer(
   override def deallocate(): Unit = {
     super.deallocate()
     onDeallocate()
+  }
+
+  override def toString: String = {
+    Objects.toStringHelper(this).add("managedBuffer", managedBuffer).toString
   }
 }

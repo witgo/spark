@@ -26,7 +26,6 @@ import java.util.Arrays;
 import com.google.common.base.Objects;
 import com.google.common.io.ByteStreams;
 
-import org.apache.spark.network.buffer.ChunkedByteBuffer;
 import org.apache.spark.network.buffer.ChunkedByteBufferOutputStream;
 import org.apache.spark.network.buffer.InputStreamManagedBuffer;
 import org.apache.spark.network.buffer.ManagedBuffer;
@@ -68,7 +67,7 @@ public class UploadBlock extends BlockTransferMessage {
   @Override
   public int hashCode() {
     int objectsHashCode = Objects.hashCode(appId, execId, blockId);
-    return (objectsHashCode * 41 + metadata.hashCode()) * 41 + blockData.hashCode();
+    return (objectsHashCode * 41 + Arrays.hashCode(metadata)) * 41 + (int) blockData.size();
   }
 
   @Override
@@ -125,7 +124,7 @@ public class UploadBlock extends BlockTransferMessage {
   }
 
   public InputStream toInputStream() throws IOException {
-    ChunkedByteBufferOutputStream out = new ChunkedByteBufferOutputStream(4 * 1024);
+    ChunkedByteBufferOutputStream out = ChunkedByteBufferOutputStream.newInstance();
     // Allow room for encoded message, plus the type byte
     Encoders.Bytes.encode(out, type().id());
     encodeWithoutBlockData(out);

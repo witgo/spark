@@ -232,8 +232,7 @@ private object TorrentBroadcast extends Logging {
       blockSize: Int,
       serializer: Serializer,
       compressionCodec: Option[CompressionCodec]): Array[ByteBuffer] = {
-    val cbbos = new ChunkedByteBufferOutputStream(blockSize,
-      ChunkedByteBufferUtil.DEFAULT_ALLOCATOR)
+    val cbbos = ChunkedByteBufferOutputStream.newInstance(blockSize)
     val out = compressionCodec.map(c => c.compressedOutputStream(cbbos)).getOrElse(cbbos)
     val ser = serializer.newInstance()
     val serOut = ser.serializeStream(out)
@@ -242,7 +241,7 @@ private object TorrentBroadcast extends Logging {
     } {
       serOut.close()
     }
-    cbbos.toChunkedByteBuffer.getChunks()
+    cbbos.toChunkedByteBuffer.toByteBuffers()
   }
 
   def unBlockifyObject[T: ClassTag](
@@ -250,7 +249,7 @@ private object TorrentBroadcast extends Logging {
       serializer: Serializer,
       compressionCodec: Option[CompressionCodec]): T = {
     require(blocks.nonEmpty, "Cannot unblockify an empty array of blocks")
-    val is = ChunkedByteBufferUtil.wrap(blocks.flatMap(_.getChunks)).toInputStream
+    val is = new SequenceInputStream(blocks.map(_.toInputStream()).toIterator.asJavaEnumeration)
     val in: InputStream = compressionCodec.map(c => c.compressedInputStream(is)).getOrElse(is)
     val ser = serializer.newInstance()
     val serIn = ser.deserializeStream(in)

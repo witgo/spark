@@ -22,92 +22,110 @@ import scala.util.Random
 import org.apache.spark.SparkFunSuite
 import org.apache.spark.network.buffer.ChunkedByteBufferOutputStream
 
-
 class ChunkedByteBufferOutputStreamSuite extends SparkFunSuite {
 
   test("empty output") {
-    val o = new ChunkedByteBufferOutputStream(1024)
+    val o = ChunkedByteBufferOutputStream.newInstance(1024)
     assert(o.toChunkedByteBuffer.size === 0)
   }
 
   test("write a single byte") {
-    val o = new ChunkedByteBufferOutputStream(1024)
+    val o = ChunkedByteBufferOutputStream.newInstance(1024)
     o.write(10)
     val chunkedByteBuffer = o.toChunkedByteBuffer
-    assert(chunkedByteBuffer.getChunks().length === 1)
-    assert(chunkedByteBuffer.getChunks().head.array().toSeq === Seq(10.toByte))
+    assert(chunkedByteBuffer.toByteBuffers().length === 1)
+    assert(chunkedByteBuffer.toByteBuffers().head.remaining() === 1)
+    assert(Seq(chunkedByteBuffer.toByteBuffers().head.get()) === Seq(10.toByte))
   }
 
   test("write a single near boundary") {
-    val o = new ChunkedByteBufferOutputStream(10)
+    val o = ChunkedByteBufferOutputStream.newInstance(10)
     o.write(new Array[Byte](9))
     o.write(99)
     val chunkedByteBuffer = o.toChunkedByteBuffer
-    assert(chunkedByteBuffer.getChunks().length === 1)
-    assert(chunkedByteBuffer.getChunks().head.array()(9) === 99.toByte)
+    assert(chunkedByteBuffer.toByteBuffers().length === 1)
+    assert(chunkedByteBuffer.toByteBuffers().head.get(9) === 99.toByte)
   }
 
   test("write a single at boundary") {
-    val o = new ChunkedByteBufferOutputStream(10)
+    val o = ChunkedByteBufferOutputStream.newInstance(10)
     o.write(new Array[Byte](10))
     o.write(99)
-    val arrays = o.toChunkedByteBuffer.getChunks().map(_.array())
+    val arrays = o.toChunkedByteBuffer.toByteBuffers()
     assert(arrays.length === 2)
-    assert(arrays(1).length === 1)
-    assert(arrays(1)(0) === 99.toByte)
+    assert(arrays(1).remaining() === 1)
+    assert(arrays(1).get() === 99.toByte)
   }
 
   test("single chunk output") {
     val ref = new Array[Byte](8)
     Random.nextBytes(ref)
-    val o = new ChunkedByteBufferOutputStream(10)
+    val o = ChunkedByteBufferOutputStream.newInstance(10)
     o.write(ref)
-    val arrays = o.toChunkedByteBuffer.getChunks().map(_.array())
+    val arrays = o.toChunkedByteBuffer.toByteBuffers()
     assert(arrays.length === 1)
-    assert(arrays.head.length === ref.length)
-    assert(arrays.head.toSeq === ref.toSeq)
+    assert(arrays.head.remaining() === ref.length)
+    val arrRef = new Array[Byte](8)
+    arrays.head.get(arrRef)
+    assert(arrRef === ref.toSeq)
   }
 
   test("single chunk output at boundary size") {
     val ref = new Array[Byte](10)
     Random.nextBytes(ref)
-    val o = new ChunkedByteBufferOutputStream(10)
+    val o = ChunkedByteBufferOutputStream.newInstance(10)
     o.write(ref)
-    val arrays = o.toChunkedByteBuffer.getChunks().map(_.array())
+    val arrays = o.toChunkedByteBuffer.toByteBuffers()
     assert(arrays.length === 1)
-    assert(arrays.head.length === ref.length)
-    assert(arrays.head.toSeq === ref.toSeq)
+    assert(arrays.head.remaining() === ref.length)
+    val arrRef = new Array[Byte](10)
+    arrays.head.get(arrRef)
+    assert(arrRef === ref.toSeq)
   }
 
   test("multiple chunk output") {
     val ref = new Array[Byte](26)
     Random.nextBytes(ref)
-    val o = new ChunkedByteBufferOutputStream(10)
+    val o = ChunkedByteBufferOutputStream.newInstance(10)
     o.write(ref)
-    val arrays = o.toChunkedByteBuffer.getChunks().map(_.array())
+    val arrays = o.toChunkedByteBuffer.toByteBuffers()
     assert(arrays.length === 3)
-    assert(arrays(0).length === 10)
-    assert(arrays(1).length === 10)
-    assert(arrays(2).length === 6)
+    assert(arrays(0).remaining === 10)
+    assert(arrays(1).remaining === 10)
+    assert(arrays(2).remaining === 6)
 
-    assert(arrays(0).toSeq === ref.slice(0, 10))
-    assert(arrays(1).toSeq === ref.slice(10, 20))
-    assert(arrays(2).toSeq === ref.slice(20, 26))
+    val arrRef = new Array[Byte](10)
+
+    arrays(0).get(arrRef)
+    assert(arrRef === ref.slice(0, 10))
+
+    arrays(1).get(arrRef)
+    assert(arrRef === ref.slice(10, 20))
+
+    arrays(2).get(arrRef, 0, 6)
+    assert(arrRef.slice(0, 6).toSeq === ref.slice(20, 26))
   }
 
   test("multiple chunk output at boundary size") {
     val ref = new Array[Byte](30)
     Random.nextBytes(ref)
-    val o = new ChunkedByteBufferOutputStream(10)
+    val o = ChunkedByteBufferOutputStream.newInstance(10)
     o.write(ref)
-    val arrays = o.toChunkedByteBuffer.getChunks().map(_.array())
+    val arrays = o.toChunkedByteBuffer.toByteBuffers()
     assert(arrays.length === 3)
-    assert(arrays(0).length === 10)
-    assert(arrays(1).length === 10)
-    assert(arrays(2).length === 10)
+    assert(arrays(0).remaining() === 10)
+    assert(arrays(1).remaining === 10)
+    assert(arrays(2).remaining === 10)
 
-    assert(arrays(0).toSeq === ref.slice(0, 10))
-    assert(arrays(1).toSeq === ref.slice(10, 20))
-    assert(arrays(2).toSeq === ref.slice(20, 30))
+    val arrRef = new Array[Byte](10)
+
+    arrays(0).get(arrRef)
+    assert(arrRef === ref.slice(0, 10))
+
+    arrays(1).get(arrRef)
+    assert(arrRef === ref.slice(10, 20))
+
+    arrays(2).get(arrRef)
+    assert(arrRef === ref.slice(20, 30))
   }
 }

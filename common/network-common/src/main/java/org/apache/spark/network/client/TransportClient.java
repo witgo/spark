@@ -37,6 +37,7 @@ import io.netty.channel.ChannelFuture;
 import io.netty.channel.ChannelFutureListener;
 import org.apache.spark.network.buffer.ChunkedByteBuffer;
 import org.apache.spark.network.buffer.InputStreamManagedBuffer;
+import org.apache.spark.network.buffer.ManagedBuffer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -237,39 +238,7 @@ public class TransportClient implements Closeable {
    * @return The RPC's id.
    */
   public long sendRpc(InputStream message, long byteCount, final RpcResponseCallback callback) {
-    final String serverAddr = getRemoteAddress(channel);
-    final long startTime = System.currentTimeMillis();
-    if (logger.isTraceEnabled()) {
-      logger.trace("Sending RPC to {}", getRemoteAddress(channel));
-    }
-
-    final long requestId = Math.abs(UUID.randomUUID().getLeastSignificantBits());
-    handler.addRpcRequest(requestId, callback);
-
-
-    channel.writeAndFlush(new RpcRequest(requestId,
-        new InputStreamManagedBuffer(message, byteCount))).addListener(
-        new ChannelFutureListener() {
-          @Override
-          public void operationComplete(ChannelFuture future) throws Exception {
-            if (future.isSuccess()) {
-              long timeTaken = System.currentTimeMillis() - startTime;
-              logger.trace("Sending request {} to {} took {} ms", requestId, serverAddr, timeTaken);
-            } else {
-              String errorMsg = String.format("Failed to send RPC %s to %s: %s", requestId,
-                  serverAddr, future.cause());
-              logger.error(errorMsg, future.cause());
-              handler.removeRpcRequest(requestId);
-              channel.close();
-              try {
-                callback.onFailure(new IOException(errorMsg, future.cause()));
-              } catch (Exception e) {
-                logger.error("Uncaught exception in RPC response callback handler!", e);
-              }
-            }
-          }
-        });
-    return requestId;
+    return sendRpc(message, byteCount, true, callback);
   }
 
   /**
@@ -289,11 +258,13 @@ public class TransportClient implements Closeable {
     final long startTime = System.currentTimeMillis();
     logger.trace("Sending RPC to {}", serverAddr);
 
+    final ManagedBuffer managedBuffer =
+        new InputStreamManagedBuffer(message, byteCount, true);
     final long requestId = Math.abs(UUID.randomUUID().getLeastSignificantBits());
     handler.addRpcRequest(requestId, callback);
 
     channel.writeAndFlush(new RpcRequest(requestId, byteCount, isBodyInFrame,
-        new InputStreamManagedBuffer(message, byteCount))).addListener(
+        managedBuffer)).addListener(
         new ChannelFutureListener() {
           @Override
           public void operationComplete(ChannelFuture future) throws Exception {

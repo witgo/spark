@@ -51,7 +51,7 @@ public final class OneWayMessage extends AbstractMessage implements RequestMessa
 
   public static OneWayMessage decode(InputStream buf) throws IOException {
     long limit = Encoders.Longs.decode(buf);
-    ManagedBuffer managedBuf = new InputStreamManagedBuffer(buf, limit);
+    ManagedBuffer managedBuf = new InputStreamManagedBuffer(buf, limit, false);
     return new OneWayMessage(managedBuf);
   }
 

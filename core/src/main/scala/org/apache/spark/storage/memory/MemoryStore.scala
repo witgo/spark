@@ -326,9 +326,10 @@ private[spark] class MemoryStore(
     var unrollMemoryUsedByThisBlock = 0L
     // Underlying buffer for unrolling the block
     val redirectableStream = new RedirectableOutputStream
-    val bbos = new ChunkedByteBufferOutputStream(initialMemoryThreshold.toInt, new Allocator {
-      override def allocate(len: Int) = allocator(len)
-    })
+    val bbos = ChunkedByteBufferOutputStream.newInstance(initialMemoryThreshold.toInt,
+      new Allocator {
+        override def allocate(len: Int) = allocator(len)
+      })
     redirectableStream.setOutputStream(bbos)
     val serializationStream: SerializationStream = {
       val ser = serializerManager.getSerializer(classTag).newInstance()

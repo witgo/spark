@@ -122,14 +122,14 @@ private[spark] class NettyBlockTransferService(
       classTag: ClassTag[_]): Future[Unit] = {
     val result = Promise[Unit]()
     val client = clientFactory.createClient(hostname, port)
-
     // StorageLevel and ClassTag are serialized as bytes using our JavaSerializer.
     // Everything else is encoded using our binary protocol.
-    val metadata = serializer.newInstance().serialize((level, classTag)).toArray
-    val uploadBlock = new UploadBlock(appId, execId, blockId.toString, metadata, blockData)
+    val metadata = serializer.newInstance().serialize((level, classTag))
+    val uploadBlock = new UploadBlock(appId, execId, blockId.toString,
+      metadata.toArray, blockData)
     val encodedLength = uploadBlock.encodedLength() + 1
-    // val isBodyInFrame = encodedLength < 48 * 1024 * 1024
-    val isBodyInFrame = encodedLength < 1
+     val isBodyInFrame = encodedLength < 48 * 1024 * 1024
+    // val isBodyInFrame = encodedLength < 1
     val inputStream = uploadBlock.toInputStream
     client.sendRpc(inputStream, encodedLength, isBodyInFrame, new RpcResponseCallback {
       override def onSuccess(response: ChunkedByteBuffer): Unit = {

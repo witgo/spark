@@ -24,7 +24,7 @@ import scala.reflect.ClassTag
 import org.apache.spark.SparkConf
 import org.apache.spark.internal.config._
 import org.apache.spark.io.CompressionCodec
-import org.apache.spark.network.buffer.{ChunkedByteBuffer, ChunkedByteBufferOutputStream, ChunkedByteBufferUtil}
+import org.apache.spark.network.buffer.{ChunkedByteBuffer, ChunkedByteBufferOutputStream}
 import org.apache.spark.security.CryptoStreamUtils
 import org.apache.spark.storage._
 
@@ -168,7 +168,7 @@ private[spark] class SerializerManager(defaultSerializer: Serializer, conf: Spar
       blockId: BlockId,
       values: Iterator[_],
       classTag: ClassTag[_]): ChunkedByteBuffer = {
-    val bbos = new ChunkedByteBufferOutputStream(32 * 1024, ChunkedByteBufferUtil.DEFAULT_ALLOCATOR)
+    val bbos = ChunkedByteBufferOutputStream.newInstance()
     val ser = getSerializer(classTag).newInstance()
     ser.serializeStream(wrapStream(blockId, bbos)).writeAll(values).close()
     bbos.toChunkedByteBuffer

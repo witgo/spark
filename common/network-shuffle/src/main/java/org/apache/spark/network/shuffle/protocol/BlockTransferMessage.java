@@ -80,7 +80,7 @@ public abstract class BlockTransferMessage implements Encodable {
   /** Serializes the 'type' byte followed by the message itself. */
   public ChunkedByteBuffer toChunkedByteBuffer() {
     try {
-      ChunkedByteBufferOutputStream out = new ChunkedByteBufferOutputStream(4 * 1024);
+      ChunkedByteBufferOutputStream out = ChunkedByteBufferOutputStream.newInstance();
       // Allow room for encoded message, plus the type byte
       Encoders.Bytes.encode(out, type().id);
       encode(out);

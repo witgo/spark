@@ -19,11 +19,11 @@ package org.apache.spark.network.buffer;
 
 import java.io.Externalizable;
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.nio.ByteBuffer;
-import java.nio.channels.WritableByteChannel;
 
 import io.netty.buffer.ByteBuf;
-
 
 public interface ChunkedByteBuffer extends Externalizable, ReferenceCounted {
 
@@ -33,9 +33,9 @@ public interface ChunkedByteBuffer extends Externalizable, ReferenceCounted {
   long size();
 
   /**
-   * Write this buffer to a channel.
+   * Write this buffer to a outputStream.
    */
-  void writeFully(WritableByteChannel channel) throws IOException;
+  void writeFully(OutputStream outputStream) throws IOException;
 
   /**
    * Wrap this buffer to view it as a Netty ByteBuf.
@@ -56,7 +56,7 @@ public interface ChunkedByteBuffer extends Externalizable, ReferenceCounted {
    */
   ByteBuffer toByteBuffer();
 
-  ChunkedByteBufferInputStream toInputStream();
+  InputStream toInputStream();
 
   /**
    * Creates an input stream to read data from this ChunkedByteBuffer.
@@ -64,21 +64,18 @@ public interface ChunkedByteBuffer extends Externalizable, ReferenceCounted {
    * @param dispose if true, [[dispose()]] will be called at the end of the stream
    *                in order to close any memory-mapped files which back this buffer.
    */
-  ChunkedByteBufferInputStream toInputStream(boolean dispose);
+  InputStream toInputStream(boolean dispose);
 
   /**
    * Make a copy of this ChunkedByteBuffer, copying all of the backing data into new buffers.
    * The new buffer will share no resources with the original buffer.
-   *
-   * @param allocator a method for allocating byte buffers
    */
-  ChunkedByteBuffer copy(Allocator allocator);
+  ChunkedByteBuffer copy();
 
   /**
    * Get duplicates of the ByteBuffers backing this ChunkedByteBuffer.
    */
-  ByteBuffer[] getChunks();
-
+  ByteBuffer[] toByteBuffers();
 
   ChunkedByteBuffer slice(long offset, long length);
 

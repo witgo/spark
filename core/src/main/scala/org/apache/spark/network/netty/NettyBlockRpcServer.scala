@@ -78,7 +78,7 @@ class NettyBlockRpcServer(
           val data = uploadBlock.blockData
           val blockId = BlockId(uploadBlock.blockId)
           blockManager.putBlockData(blockId, data, level, classTag)
-          responseContext.onSuccess(ChunkedByteBufferUtil.allocate(0))
+          responseContext.onSuccess(ChunkedByteBufferUtil.wrap())
       }
       Unit
     }

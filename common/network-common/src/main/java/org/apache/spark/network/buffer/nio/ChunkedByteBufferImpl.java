@@ -15,21 +15,26 @@
  * limitations under the License.
  */
 
-package org.apache.spark.network.buffer;
+package org.apache.spark.network.buffer.nio;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.ObjectInput;
 import java.io.ObjectOutput;
+import java.io.OutputStream;
 import java.nio.ByteBuffer;
 import java.nio.channels.WritableByteChannel;
 import java.util.ArrayList;
-import java.util.Arrays;
 
-import com.google.common.base.Objects;
 import com.google.common.base.Throwables;
 import com.google.common.base.Preconditions;
+import com.google.common.io.ByteStreams;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
+import org.apache.spark.network.buffer.AbstractReferenceCounted;
+import org.apache.spark.network.buffer.ChunkedByteBuffer;
+import org.apache.spark.network.buffer.ChunkedByteBufferUtil;
+import org.apache.spark.network.buffer.IllegalReferenceCountException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -85,6 +90,7 @@ public class ChunkedByteBufferImpl extends AbstractReferenceCounted implements C
 
   @Override
   public void readExternal(ObjectInput in) throws IOException, ClassNotFoundException {
+    ensureAccessible();
     ByteBuffer[] buffers = new ByteBuffer[in.readInt()];
     for (int i = 0; i < buffers.length; i++) {
       int length = in.readInt();
@@ -114,7 +120,6 @@ public class ChunkedByteBufferImpl extends AbstractReferenceCounted implements C
   /**
    * Write this buffer to a channel.
    */
-  @Override
   public void writeFully(WritableByteChannel channel) throws IOException {
     ensureAccessible();
     for (int i = 0; i < chunks.length; i++) {
@@ -126,6 +131,15 @@ public class ChunkedByteBufferImpl extends AbstractReferenceCounted implements C
   }
 
   /**
+   * Write this buffer to a outputStream.
+   */
+  @Override
+  public void writeFully(OutputStream outputStream) throws IOException {
+    ensureAccessible();
+    ByteStreams.copy(toInputStream(), outputStream);
+  }
+
+  /**
    * Wrap this buffer to view it as a Netty ByteBuf.
    */
   @Override
@@ -134,7 +148,7 @@ public class ChunkedByteBufferImpl extends AbstractReferenceCounted implements C
     long len = size();
     Preconditions.checkArgument(size() <= Integer.MAX_VALUE,
         "Too large ByteBuf: %s", new Object[]{Long.valueOf(len)});
-    return Unpooled.wrappedBuffer(getChunks());
+    return Unpooled.wrappedBuffer(toByteBuffers());
   }
 
   /**
@@ -180,7 +194,7 @@ public class ChunkedByteBufferImpl extends AbstractReferenceCounted implements C
   }
 
   @Override
-  public ChunkedByteBufferInputStream toInputStream() {
+  public InputStream toInputStream() {
     return toInputStream(false);
   }
 
@@ -199,16 +213,14 @@ public class ChunkedByteBufferImpl extends AbstractReferenceCounted implements C
   /**
    * Make a copy of this ChunkedByteBuffer, copying all of the backing data into new buffers.
    * The new buffer will share no resources with the original buffer.
-   *
-   * @param allocator a method for allocating byte buffers
    */
   @Override
-  public ChunkedByteBuffer copy(Allocator allocator) {
+  public ChunkedByteBuffer copy() {
     ensureAccessible();
     ByteBuffer[] copiedChunks = new ByteBuffer[chunks.length];
     for (int i = 0; i < chunks.length; i++) {
       ByteBuffer chunk = chunks[i].duplicate();
-      ByteBuffer newChunk = allocator.allocate(chunk.remaining());
+      ByteBuffer newChunk = ByteBuffer.allocate(chunk.remaining());
       newChunk.put(chunk);
       newChunk.flip();
       copiedChunks[i] = newChunk;
@@ -220,7 +232,7 @@ public class ChunkedByteBufferImpl extends AbstractReferenceCounted implements C
    * Get duplicates of the ByteBuffers backing this ChunkedByteBuffer.
    */
   @Override
-  public ByteBuffer[] getChunks() {
+  public ByteBuffer[] toByteBuffers() {
     ensureAccessible();
     ByteBuffer[] buffs = new ByteBuffer[chunks.length];
     for (int i = 0; i < chunks.length; i++) {
@@ -276,7 +288,7 @@ public class ChunkedByteBufferImpl extends AbstractReferenceCounted implements C
   @Override
   public ChunkedByteBuffer duplicate() {
     ensureAccessible();
-    return new DerivedChunkedByteBuffer(getChunks(), this);
+    return new DerivedChunkedByteBuffer(toByteBuffers(), this);
   }
 
   @Override
@@ -290,22 +302,6 @@ public class ChunkedByteBufferImpl extends AbstractReferenceCounted implements C
     super.retain(increment);
     return this;
   }
-
-//  @Override
-//  public int hashCode() {
-//    ensureAccessible();
-//    return Arrays.hashCode(getChunks());
-//  }
-//
-//  @Override
-//  public boolean equals(Object other) {
-//    ensureAccessible();
-//    if (other != null && other instanceof ChunkedByteBuffer) {
-//      ChunkedByteBuffer o = (ChunkedByteBuffer) other;
-//      return Objects.equal(getChunks(), o.getChunks());
-//    }
-//    return false;
-//  }
 
   /**
    * Should be called by every method that tries to access the buffers content to check

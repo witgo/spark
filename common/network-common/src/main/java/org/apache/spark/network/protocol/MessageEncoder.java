@@ -27,6 +27,7 @@ import io.netty.handler.codec.MessageToMessageEncoder;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import org.apache.spark.network.buffer.ChunkedByteBuffer;
 import org.apache.spark.network.buffer.ChunkedByteBufferOutputStream;
 
 /**
@@ -73,13 +74,14 @@ public final class MessageEncoder extends MessageToMessageEncoder<Message> {
     }
 
     Message.Type msgType = in.type();
+    logger.trace("Send message " + msgType + ": " + in);
     // All messages have the frame length, message type, and message itself. The frame length
     // may optionally include the length of the body data, depending on what message is being
     // sent.
     long headerLength = 8 + msgType.encodedLength() + in.encodedLength();
     long frameLength = headerLength + (isBodyInFrame ? bodyLength : 0);
 
-    ChunkedByteBufferOutputStream outputStream= new ChunkedByteBufferOutputStream(32 * 1024);
+    ChunkedByteBufferOutputStream outputStream = ChunkedByteBufferOutputStream.newInstance();
     DataOutputStream header = new DataOutputStream(outputStream);
     header.writeLong(frameLength);
     msgType.encode(header);

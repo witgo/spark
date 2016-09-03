@@ -16,15 +16,20 @@
  */
 package org.apache.spark.network.buffer;
 
+import java.io.DataInput;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.ByteBuffer;
 import java.nio.MappedByteBuffer;
 
 import com.google.common.io.ByteStreams;
+import io.netty.buffer.ByteBuf;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import sun.nio.ch.DirectBuffer;
+
+import org.apache.spark.network.buffer.netty.ChunkedByteBufImpl;
+import org.apache.spark.network.buffer.nio.ChunkedByteBufferImpl;
 
 public class ChunkedByteBufferUtil {
   private static final Logger logger = LoggerFactory.getLogger(ChunkedByteBufferUtil.class);
@@ -46,11 +51,21 @@ public class ChunkedByteBufferUtil {
   public static ChunkedByteBuffer wrap(ByteBuffer chunk) {
     ByteBuffer[] chunks = new ByteBuffer[1];
     chunks[0] = chunk;
-    return new ChunkedByteBufferImpl(chunks);
+    return wrap(chunks);
+  }
+
+  public static ChunkedByteBuffer wrap(ByteBuf chunk) {
+    ByteBuf[] chunks = new ByteBuf[1];
+    chunks[0] = chunk;
+    return wrap(chunks);
   }
 
   public static ChunkedByteBuffer wrap(ByteBuffer[] chunks) {
     return new ChunkedByteBufferImpl(chunks);
+  }
+
+  public static ChunkedByteBuffer wrap(ByteBuf[] chunks) {
+    return new ChunkedByteBufImpl(chunks);
   }
 
   public static ChunkedByteBuffer wrap(byte[] array) {
@@ -61,47 +76,29 @@ public class ChunkedByteBufferUtil {
     return wrap(ByteBuffer.wrap(array, offset, length));
   }
 
-  public static ChunkedByteBuffer wrap(
-      byte[] bytes, int off, int len, int chunkSize) {
-    return wrap(bytes, off, len, chunkSize, ChunkedByteBufferUtil.DEFAULT_ALLOCATOR);
-  }
-
-  public static ChunkedByteBuffer wrap(
-      byte[] bytes, int off, int len, int chunkSize, Allocator allocator) {
-    assert bytes.length >= off + len;
-    int numChunk = (int) Math.ceil(((double) len) / chunkSize);
-    ByteBuffer[] chunks = new ByteBuffer[numChunk];
-    for (int i = 0; i < numChunk; i++) {
-      int bufLen = Math.min(len, chunkSize);
-      ByteBuffer chunk = allocator.allocate(bufLen);
-      chunk.put(bytes, off, bufLen);
-      chunk.flip();
-      chunks[i] = chunk;
-      off += bufLen;
-      len -= bufLen;
-    }
-    return wrap(chunks);
-  }
-
   public static ChunkedByteBuffer wrap(InputStream in, int chunkSize) throws IOException {
-    ChunkedByteBufferOutputStream out = new ChunkedByteBufferOutputStream(chunkSize);
+    ChunkedByteBufferOutputStream out = ChunkedByteBufferOutputStream.newInstance(chunkSize);
     ByteStreams.copy(in, out);
     out.close();
     return out.toChunkedByteBuffer();
   }
 
-  public static ChunkedByteBuffer allocate(int capacity) {
-    return allocate(capacity, ChunkedByteBufferUtil.DEFAULT_ALLOCATOR);
-  }
-
-  public static ChunkedByteBuffer allocate(int capacity, Allocator allocator) {
-    return wrap(allocator.allocate(capacity));
-  }
-
-  public static Allocator DEFAULT_ALLOCATOR = new Allocator() {
-    @Override
-    public ByteBuffer allocate(int len) {
-      return ByteBuffer.allocate(len);
+  public static ChunkedByteBuffer wrap(
+      DataInput from, int chunkSize, long len) throws IOException {
+    ChunkedByteBufferOutputStream out = ChunkedByteBufferOutputStream.newInstance(chunkSize);
+    final int BUF_SIZE = Math.min(chunkSize, 4 * 1024);
+    byte[] buf = new byte[BUF_SIZE];
+    while (len > 0) {
+      int r = (int) Math.min(len, BUF_SIZE);
+      from.readFully(buf, 0, r);
+      out.write(buf, 0, r);
+      len -= r;
     }
-  };
+    out.close();
+    return out.toChunkedByteBuffer();
+  }
+
+  public static ChunkedByteBuffer wrap(InputStream in) throws IOException {
+    return wrap(in, 32 * 1024);
+  }
 }

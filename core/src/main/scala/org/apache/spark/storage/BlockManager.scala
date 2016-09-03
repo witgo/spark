@@ -446,7 +446,7 @@ private[spark] class BlockManager(
               maybeCacheDiskValuesInMemory(info, blockId, level, diskValues)
             } else {
               val stream = maybeCacheDiskDataInMemory(info, blockId, level, diskBytes)
-                .map {_.toInputStream(false)}
+                .map {_.toInputStream()}
                 .getOrElse { diskBytes.createInputStream() }
               serializerManager.dataDeserializeStream(blockId, stream)(info.classTag)
             }
@@ -558,25 +558,21 @@ private[spark] class BlockManager(
     while (locationIterator.hasNext) {
       val loc = locationIterator.next()
       logDebug(s"Getting remote block $blockId from $loc")
+      var managedBuffer: ManagedBuffer = null
       val data = try {
-        val managedBuffer = blockTransferService.fetchBlockSync(
+          managedBuffer = blockTransferService.fetchBlockSync(
           loc.host, loc.port, loc.executorId, blockId.toString)
         val dataSize = managedBuffer.size()
-        val success = memoryManager.acquireUnrollMemory(blockId,
-          managedBuffer.size(), MemoryMode.ON_HEAP)
+        val success = memoryManager.acquireUnrollMemory(blockId, dataSize, MemoryMode.ON_HEAP)
         if (success) {
           val chunkSize = math.min(dataSize, 32 * 1024).toInt
-          val out = new ChunkedByteBufferOutputStream(chunkSize)
-          try {
-            Utils.copyStream(managedBuffer.createInputStream(), out, closeStreams = true)
-            if (out.size() != dataSize) {
-              throw new SparkException(s"buffer size ${out.size()} but expected $dataSize")
-            }
-          } finally {
-            managedBuffer.release()
+          val out = ChunkedByteBufferOutputStream.newInstance(chunkSize)
+          Utils.copyStream(managedBuffer.createInputStream(), out, closeStreams = true)
+          if (out.size() != dataSize) {
+            throw new SparkException(s"buffer size ${out.size()} but expected $dataSize")
           }
           new ReferenceCountedManagedBuffer(out.toChunkedByteBuffer, () =>
-            memoryManager.releaseUnrollMemory(managedBuffer.size(), MemoryMode.ON_HEAP))
+            memoryManager.releaseUnrollMemory(dataSize, MemoryMode.ON_HEAP))
         } else {
           val (tempLocalBlockId, _) = diskBlockManager.createTempLocalBlock()
           diskStore.put(tempLocalBlockId) { fileOutputStream =>
@@ -616,6 +612,8 @@ private[spark] class BlockManager(
 
           // This location failed, so we retry fetch from a different one by returning null here
           null
+      } finally {
+        if (managedBuffer != null) managedBuffer.release()
       }
 
       if (data != null) {
@@ -1067,9 +1065,7 @@ private[spark] class BlockManager(
             // If the file size is bigger than the free memory, OOM will happen. So if we
             // cannot put it into MemoryStore, copyForMemory should not be created. That's why
             // this action is put into a `() => ChunkedByteBuffer` and created lazily.
-            val out = new ChunkedByteBufferOutputStream(32 * 1024, new Allocator {
-              override def allocate(len: Int) = allocator(len)
-            })
+            val out = ChunkedByteBufferOutputStream.newInstance()
             Utils.copyStream(diskBytes.createInputStream(), out, true)
             out.toChunkedByteBuffer
           })

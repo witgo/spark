@@ -70,12 +70,12 @@ public final class ChunkFetchSuccess extends AbstractResponseMessage {
   }
 
   /** Decoding uses the given ByteBuf as our data, and will retain() it. */
-  public static ChunkFetchSuccess decode(InputStream buf) throws IOException {
-    StreamChunkId streamChunkId = StreamChunkId.decode(buf);
-    long byteCount =  Encoders.Longs.decode(buf);
+  public static ChunkFetchSuccess decode(InputStream in) throws IOException {
+    StreamChunkId streamChunkId = StreamChunkId.decode(in);
+    long byteCount =  Encoders.Longs.decode(in);
     ManagedBuffer managedBuf = null;
     if (byteCount <= MAX_FRAME_SIZE) {
-      managedBuf = new InputStreamManagedBuffer(buf, byteCount);
+      managedBuf = new InputStreamManagedBuffer(in, byteCount);
     }
     return new ChunkFetchSuccess(streamChunkId, byteCount, managedBuf);
   }

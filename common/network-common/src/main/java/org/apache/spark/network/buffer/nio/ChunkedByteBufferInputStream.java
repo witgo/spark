@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-package org.apache.spark.network.buffer;
+package org.apache.spark.network.buffer.nio;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -25,8 +25,10 @@ import java.util.Arrays;
 import java.util.Iterator;
 
 import com.google.common.primitives.UnsignedBytes;
+import org.apache.spark.network.buffer.ChunkedByteBuffer;
+import org.apache.spark.network.buffer.ChunkedByteBufferUtil;
 
-public class ChunkedByteBufferInputStream extends InputStream {
+public  class ChunkedByteBufferInputStream extends InputStream {
 
   private ChunkedByteBuffer chunkedByteBuffer;
   private boolean dispose;
@@ -42,7 +44,7 @@ public class ChunkedByteBufferInputStream extends InputStream {
   public ChunkedByteBufferInputStream(ChunkedByteBuffer chunkedByteBuffer, boolean dispose) {
     this.chunkedByteBuffer = chunkedByteBuffer;
     this.dispose = dispose;
-    this.chunks = Arrays.asList(chunkedByteBuffer.getChunks()).iterator();
+    this.chunks = Arrays.asList(chunkedByteBuffer.toByteBuffers()).iterator();
     if (chunks.hasNext()) {
       currentChunk = chunks.next();
     } else {

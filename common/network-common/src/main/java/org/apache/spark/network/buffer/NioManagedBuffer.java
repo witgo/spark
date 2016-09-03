@@ -44,18 +44,12 @@ public class NioManagedBuffer extends ManagedBuffer {
 
   @Override
   public ChunkedByteBuffer nioByteBuffer() throws IOException {
-    return ChunkedByteBufferUtil.wrap(buf.getChunks());
+    return buf.retain();
   }
 
   @Override
   public InputStream createInputStream() throws IOException {
     return buf.toInputStream();
-  }
-
-  @Override
-  public ManagedBuffer retain() {
-    super.retain();
-    return this;
   }
 
   @Override
@@ -72,6 +66,11 @@ public class NioManagedBuffer extends ManagedBuffer {
     return Objects.toStringHelper(this)
       .add("buf", buf)
       .toString();
+  }
+
+  @Override
+  protected void deallocate() {
+    buf.release();
   }
 }
 

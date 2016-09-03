@@ -20,6 +20,7 @@ package org.apache.spark.network.buffer;
 import java.io.IOException;
 import java.io.InputStream;
 
+import com.google.common.base.Objects;
 import com.google.common.base.Preconditions;
 
 import org.apache.spark.network.util.LimitedInputStream;
@@ -28,6 +29,7 @@ public class InputStreamManagedBuffer extends ManagedBuffer {
   private final LimitedInputStream inputStream;
   private final long limit;
   private boolean hasRead = false;
+  private boolean hasCreateInputStream = false;
   private ChunkedByteBuffer buffer = null;
 
   public InputStreamManagedBuffer(InputStream in, long byteCount) {
@@ -56,15 +58,17 @@ public class InputStreamManagedBuffer extends ManagedBuffer {
   public InputStream createInputStream() throws IOException {
     ensureAccessible();
     Preconditions.checkState(!hasRead, "nioByteBuffer has been called!");
+    Preconditions.checkState(!hasCreateInputStream, "nioByteBuffer has been called!");
+    hasCreateInputStream = true;
     return inputStream;
   }
 
   public Object convertToNetty() throws IOException {
     ensureAccessible();
     if (hasRead) {
-      return buffer;
+      return buffer.toInputStream();
     } else {
-      return inputStream;
+      return createInputStream();
     }
   }
 
@@ -84,5 +88,19 @@ public class InputStreamManagedBuffer extends ManagedBuffer {
    */
   protected final void ensureAccessible() {
     if (refCnt() == 0) throw new IllegalReferenceCountException(0);
+  }
+
+  @Override
+  public String toString() {
+    ensureAccessible();
+    if (hasRead && buffer != null) {
+      return Objects.toStringHelper(this)
+          .add("buf", buffer)
+          .toString();
+    } else {
+      return Objects.toStringHelper(this)
+          .add("size", size())
+          .toString();
+    }
   }
 }

@@ -19,7 +19,9 @@ package org.apache.spark.network.buffer;
 
 import java.io.IOException;
 import java.io.InputStream;
-import java.nio.ByteBuffer;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * This interface provides an immutable view for data in the form of bytes. The implementation
@@ -36,6 +38,7 @@ import java.nio.ByteBuffer;
  */
 public abstract class ManagedBuffer extends AbstractReferenceCounted {
 
+  private static final Logger logger = LoggerFactory.getLogger(ManagedBuffer.class);
   /** Number of bytes of the data. */
   public abstract long size();
 
@@ -71,18 +74,6 @@ public abstract class ManagedBuffer extends AbstractReferenceCounted {
       retain();
     }
     return this;
-  }
-
-  @Override
-  public boolean release(int decrement) {
-    if (decrement <= 0) {
-      throw new IllegalArgumentException("decrement: " + decrement + " (expected: > 0)");
-    }
-    boolean ret = false;
-    for (int i = 0; i < decrement; i++) {
-      ret = release();
-    }
-    return ret;
   }
 
   @Override

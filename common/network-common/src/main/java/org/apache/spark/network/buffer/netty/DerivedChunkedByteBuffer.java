@@ -1,20 +1,16 @@
-package org.apache.spark.network.buffer;
+package org.apache.spark.network.buffer.netty;
 
-import java.nio.ByteBuffer;
+import io.netty.buffer.ByteBuf;
+import org.apache.spark.network.buffer.ChunkedByteBuffer;
 
-public class DerivedChunkedByteBuffer extends ChunkedByteBufferImpl {
+public class DerivedChunkedByteBuffer extends ChunkedByteBufImpl {
 
   final ChunkedByteBuffer unwrap;
 
-  public DerivedChunkedByteBuffer(ByteBuffer[] chunks, ChunkedByteBuffer unwrap) {
+  public DerivedChunkedByteBuffer(ByteBuf[] chunks, ChunkedByteBuffer unwrap) {
     super(chunks);
     this.unwrap = unwrap;
   }
-
-//  public DerivedChunkedByteBuffer() {
-//    super();
-//    this.unwrap = this;
-//  }
 
   @Override
   public int refCnt() {
