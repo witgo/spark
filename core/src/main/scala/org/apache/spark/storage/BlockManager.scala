@@ -1065,7 +1065,9 @@ private[spark] class BlockManager(
             // If the file size is bigger than the free memory, OOM will happen. So if we
             // cannot put it into MemoryStore, copyForMemory should not be created. That's why
             // this action is put into a `() => ChunkedByteBuffer` and created lazily.
-            val out = ChunkedByteBufferOutputStream.newInstance()
+            val out = ChunkedByteBufferOutputStream.newInstance(32 * 1024, new Allocator {
+              override def allocate(len: Int) = allocator(len)
+            })
             Utils.copyStream(diskBytes.createInputStream(), out, true)
             out.toChunkedByteBuffer
           })

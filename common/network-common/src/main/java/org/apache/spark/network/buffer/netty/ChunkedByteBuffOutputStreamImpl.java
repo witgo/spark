@@ -59,7 +59,7 @@ public class ChunkedByteBuffOutputStreamImpl extends ChunkedByteBufferOutputStre
   }
 
   public ChunkedByteBuffOutputStreamImpl(int chunkSize, boolean isDirect) {
-    this(chunkSize, isDirect, UnpooledByteBufAllocator.DEFAULT);
+    this(chunkSize, isDirect, ChunkedByteBufImpl.DEFAULT);
   }
 
   public long size() {
