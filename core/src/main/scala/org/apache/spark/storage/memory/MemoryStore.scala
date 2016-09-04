@@ -409,7 +409,7 @@ private[spark] class MemoryStore(
       case null => None
       case e: DeserializedMemoryEntry[_] =>
         throw new IllegalArgumentException("should only call getBytes on serialized blocks")
-      case SerializedMemoryEntry(bytes, _, _) => Some(bytes)
+      case SerializedMemoryEntry(bytes, _, _) => Some(bytes.retain())
     }
   }
 
@@ -433,7 +433,8 @@ private[spark] class MemoryStore(
       val entrySize = entry.size
       val entryMemoryMode = entry.memoryMode
       entry match {
-        case SerializedMemoryEntry(buffer, _, _) => buffer.release()
+        case SerializedMemoryEntry(buffer, _, _) =>
+          if (buffer.refCnt() > 0) buffer.release(buffer.refCnt())
         case _ =>
       }
       memoryManager.releaseStorageMemory(entrySize, entryMemoryMode)

@@ -31,8 +31,10 @@ import org.mockito.Mockito;
 import static org.junit.Assert.*;
 
 import org.apache.spark.network.TestManagedBuffer;
+import org.apache.spark.network.buffer.ChunkedByteBuffer;
+import org.apache.spark.network.buffer.ChunkedByteBufferUtil;
 import org.apache.spark.network.buffer.ManagedBuffer;
-import org.apache.spark.network.buffer.NettyManagedBuffer;
+import org.apache.spark.network.buffer.NioManagedBuffer;
 import org.apache.spark.network.util.ByteArrayWritableChannel;
 
 public class MessageWithHeaderSuite {
@@ -50,10 +52,11 @@ public class MessageWithHeaderSuite {
   @Test
   public void testByteBufBody() throws Exception {
     ByteBuf header = Unpooled.copyLong(42);
-    ByteBuf bodyPassedToNettyManagedBuffer = Unpooled.copyLong(84);
+    ChunkedByteBuffer bodyPassedToNettyManagedBuffer =
+        ChunkedByteBufferUtil.wrap(Unpooled.copyLong(8));
     assertEquals(1, header.refCnt());
     assertEquals(1, bodyPassedToNettyManagedBuffer.refCnt());
-    ManagedBuffer managedBuf = new NettyManagedBuffer(bodyPassedToNettyManagedBuffer);
+    ManagedBuffer managedBuf = new NioManagedBuffer(bodyPassedToNettyManagedBuffer);
 
     Object body = managedBuf.convertToNetty();
     assertEquals(2, bodyPassedToNettyManagedBuffer.refCnt());

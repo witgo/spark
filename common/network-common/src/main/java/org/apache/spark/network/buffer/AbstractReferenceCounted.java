@@ -17,9 +17,9 @@
 
 package org.apache.spark.network.buffer;
 
-import io.netty.util.internal.PlatformDependent;
-
 import java.util.concurrent.atomic.AtomicIntegerFieldUpdater;
+
+import io.netty.util.internal.PlatformDependent;
 
 /**
  * Abstract base class for classes wants to implement {@link ReferenceCounted}.
@@ -53,15 +53,7 @@ public abstract class AbstractReferenceCounted implements ReferenceCounted {
 
   @Override
   public ReferenceCounted retain() {
-    for (; ; ) {
-      int refCnt = this.refCnt;
-      if (refCnt == 0 || refCnt == Integer.MAX_VALUE) {
-        throw new IllegalReferenceCountException(refCnt, 1);
-      }
-      if (refCntUpdater.compareAndSet(this, refCnt, refCnt + 1)) {
-        break;
-      }
-    }
+    doRetain(1);
     return this;
   }
 
@@ -70,11 +62,17 @@ public abstract class AbstractReferenceCounted implements ReferenceCounted {
     if (increment <= 0) {
       throw new IllegalArgumentException("increment: " + increment + " (expected: > 0)");
     }
+    doRetain(increment);
+    return this;
+  }
 
+  protected ReferenceCounted doRetain(int increment) {
     for (; ; ) {
-      final int nextCnt;
       int refCnt = this.refCnt;
-      if (refCnt == 0 || (nextCnt = refCnt + increment) < 0) {
+      final int nextCnt = refCnt + increment;
+
+      // Ensure we not resurrect (which means the refCnt was 0) and also that we encountered an overflow.
+      if (nextCnt <= increment) {
         throw new IllegalReferenceCountException(refCnt, increment);
       }
       if (refCntUpdater.compareAndSet(this, refCnt, nextCnt)) {
@@ -86,20 +84,7 @@ public abstract class AbstractReferenceCounted implements ReferenceCounted {
 
   @Override
   public boolean release() {
-    for (; ; ) {
-      int refCnt = this.refCnt;
-      if (refCnt == 0) {
-        throw new IllegalReferenceCountException(0, -1);
-      }
-
-      if (refCntUpdater.compareAndSet(this, refCnt, refCnt - 1)) {
-        if (refCnt == 1) {
-          deallocate();
-          return true;
-        }
-        return false;
-      }
-    }
+    return doRelease(1);
   }
 
   @Override
@@ -107,7 +92,10 @@ public abstract class AbstractReferenceCounted implements ReferenceCounted {
     if (decrement <= 0) {
       throw new IllegalArgumentException("decrement: " + decrement + " (expected: > 0)");
     }
+    return doRelease(decrement);
+  }
 
+  protected boolean doRelease(int decrement) {
     for (; ; ) {
       int refCnt = this.refCnt;
       if (refCnt < decrement) {

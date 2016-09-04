@@ -21,12 +21,12 @@ import java.io.InputStream
 
 import com.google.common.base.Objects
 
-import org.apache.spark.network.buffer.{ChunkedByteBuffer, ManagedBuffer, NettyManagedBuffer}
+import org.apache.spark.network.buffer.{ChunkedByteBuffer, ManagedBuffer, NioManagedBuffer}
 
 private[storage] class ReferenceCountedManagedBuffer(
   var managedBuffer: ManagedBuffer, val onDeallocate: () => Unit) extends ManagedBuffer {
   def this(chunkedBuffer: ChunkedByteBuffer, onDeallocate: () => Unit) {
-    this(new NettyManagedBuffer(chunkedBuffer.toNetty), onDeallocate)
+    this(new NioManagedBuffer(chunkedBuffer), onDeallocate)
   }
 
   def size: Long = {

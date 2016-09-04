@@ -35,11 +35,14 @@ import io.netty.buffer.ByteBuf;
 import io.netty.buffer.CompositeByteBuf;
 import io.netty.buffer.ByteBufAllocator;
 import io.netty.buffer.UnpooledByteBufAllocator;
-import org.apache.spark.network.buffer.*;
-import org.apache.spark.network.protocol.ByteBufInputStream;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import org.apache.spark.network.buffer.AbstractReferenceCounted;
+import org.apache.spark.network.buffer.ChunkedByteBuffer;
+import org.apache.spark.network.buffer.ChunkedByteBufferUtil;
+import org.apache.spark.network.buffer.IllegalReferenceCountException;
+import org.apache.spark.network.protocol.ByteBufInputStream;
 import org.apache.spark.network.util.ByteArrayWritableChannel;
 
 public class ChunkedByteBufImpl extends AbstractReferenceCounted implements ChunkedByteBuffer {

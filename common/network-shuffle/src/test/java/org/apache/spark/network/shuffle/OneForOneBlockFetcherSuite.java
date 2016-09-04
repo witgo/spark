@@ -23,7 +23,6 @@ import java.util.LinkedHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import com.google.common.collect.Maps;
-import io.netty.buffer.Unpooled;
 import org.junit.Test;
 import org.mockito.invocation.InvocationOnMock;
 import org.mockito.stubbing.Answer;
@@ -41,7 +40,6 @@ import static org.mockito.Mockito.verify;
 
 import org.apache.spark.network.buffer.ChunkedByteBuffer;
 import org.apache.spark.network.buffer.ManagedBuffer;
-import org.apache.spark.network.buffer.NettyManagedBuffer;
 import org.apache.spark.network.buffer.NioManagedBuffer;
 import org.apache.spark.network.client.ChunkReceivedCallback;
 import org.apache.spark.network.client.RpcResponseCallback;
@@ -66,7 +64,7 @@ public class OneForOneBlockFetcherSuite {
     LinkedHashMap<String, ManagedBuffer> blocks = Maps.newLinkedHashMap();
     blocks.put("b0", new NioManagedBuffer(ByteBuffer.wrap(new byte[12])));
     blocks.put("b1", new NioManagedBuffer(ByteBuffer.wrap(new byte[23])));
-    blocks.put("b2", new NettyManagedBuffer(Unpooled.wrappedBuffer(new byte[23])));
+    blocks.put("b2", new NioManagedBuffer(ByteBuffer.wrap(new byte[23])));
 
     BlockFetchingListener listener = fetchBlocks(blocks);
 

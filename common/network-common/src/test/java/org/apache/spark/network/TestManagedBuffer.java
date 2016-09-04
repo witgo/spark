@@ -22,11 +22,11 @@ import java.io.InputStream;
 import java.nio.ByteBuffer;
 
 import com.google.common.base.Preconditions;
-import io.netty.buffer.Unpooled;
 
 import org.apache.spark.network.buffer.ChunkedByteBuffer;
+import org.apache.spark.network.buffer.ChunkedByteBufferUtil;
 import org.apache.spark.network.buffer.ManagedBuffer;
-import org.apache.spark.network.buffer.NettyManagedBuffer;
+import org.apache.spark.network.buffer.NioManagedBuffer;
 
 /**
  * A ManagedBuffer implementation that contains 0, 1, 2, 3, ..., (len-1).
@@ -36,7 +36,7 @@ import org.apache.spark.network.buffer.NettyManagedBuffer;
 public class TestManagedBuffer extends ManagedBuffer {
 
   private final int len;
-  private NettyManagedBuffer underlying;
+  private NioManagedBuffer underlying;
 
   public TestManagedBuffer(int len) {
     Preconditions.checkArgument(len <= Byte.MAX_VALUE);
@@ -45,7 +45,7 @@ public class TestManagedBuffer extends ManagedBuffer {
     for (int i = 0; i < len; i ++) {
       byteArray[i] = (byte) i;
     }
-    this.underlying = new NettyManagedBuffer(Unpooled.wrappedBuffer(byteArray));
+    this.underlying = new NioManagedBuffer(ChunkedByteBufferUtil.wrap(byteArray));
   }
 
 

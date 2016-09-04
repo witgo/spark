@@ -19,7 +19,7 @@ package org.apache.spark.storage
 
 import java.io.InputStream
 
-import org.apache.spark.network.buffer.{ChunkedByteBuffer, ManagedBuffer, NettyManagedBuffer}
+import org.apache.spark.network.buffer.{ChunkedByteBuffer, ManagedBuffer, NioManagedBuffer}
 
 /**
  * This [[ManagedBuffer]] wraps a [[ChunkedByteBuffer]] retrieved from the [[BlockManager]]
@@ -37,7 +37,7 @@ private[storage] class BlockManagerManagedBuffer(
   def this(blockInfoManager: BlockInfoManager,
     blockId: BlockId,
     chunkedBuffer: ChunkedByteBuffer) {
-    this(blockInfoManager, blockId, new NettyManagedBuffer(chunkedBuffer.toNetty))
+    this(blockInfoManager, blockId, new NioManagedBuffer(chunkedBuffer))
   }
 
   def size: Long = managedBuffer.size()

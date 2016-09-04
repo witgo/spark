@@ -17,9 +17,9 @@
 
 package org.apache.spark.network.buffer.nio;
 
-import org.apache.spark.network.buffer.ChunkedByteBuffer;
-
 import java.nio.ByteBuffer;
+
+import org.apache.spark.network.buffer.ChunkedByteBuffer;
 
 public class DerivedChunkedByteBuffer extends ChunkedByteBufferImpl {
 
