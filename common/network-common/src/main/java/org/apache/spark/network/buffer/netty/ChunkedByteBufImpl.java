@@ -116,7 +116,7 @@ public class ChunkedByteBufImpl extends AbstractReferenceCounted implements Chun
     byte[] buf = null;
     for (int i = 0; i < buffers.length; i++) {
       int length = in.readInt();
-      ByteBuf buffer = DEFAULT.buffer(length, length);
+      ByteBuf buffer = DEFAULT.heapBuffer(length, length);
       if (buffer.hasArray()) {
         in.readFully(buffer.array(), buffer.arrayOffset() + buffer.writerIndex(), length);
         buffer.writerIndex(buffer.writerIndex() + length);
@@ -163,7 +163,7 @@ public class ChunkedByteBufImpl extends AbstractReferenceCounted implements Chun
     Preconditions.checkArgument(size() <= Integer.MAX_VALUE,
         "Too large ByteBuf: %s", new Object[]{Long.valueOf(len)});
     if (chunks.length == 0) {
-      return DEFAULT.buffer(0, 0);
+      return DEFAULT.heapBuffer(0, 0);
     } else if (chunks.length == 1) {
       return chunks[0].retain().duplicate();
     } else {
