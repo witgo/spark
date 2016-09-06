@@ -23,7 +23,7 @@ import com.google.common.base.Objects
 
 import org.apache.spark.network.buffer.{ChunkedByteBuffer, ManagedBuffer, NioManagedBuffer}
 
-private[storage] class ReferenceCountedManagedBuffer(
+private[storage] class ReleasableManagedBuffer(
   var managedBuffer: ManagedBuffer, val onDeallocate: () => Unit) extends ManagedBuffer {
   def this(chunkedBuffer: ChunkedByteBuffer, onDeallocate: () => Unit) {
     this(new NioManagedBuffer(chunkedBuffer), onDeallocate)

@@ -111,8 +111,8 @@ public class Encoders {
       return 1;
     }
 
-    public static void encode(OutputStream buf, byte arr) throws IOException {
-      buf.write(arr);
+    public static void encode(OutputStream out, byte arr) throws IOException {
+      out.write(arr);
     }
 
     public static byte decode(InputStream in) throws IOException {

@@ -45,13 +45,13 @@ public final class OneWayMessage extends AbstractMessage implements RequestMessa
   }
 
   @Override
-  public void encode(OutputStream buf) throws IOException {
-    Encoders.Longs.encode(buf, body().size());
+  public void encode(OutputStream out) throws IOException {
+    Encoders.Longs.encode(out, body().size());
   }
 
-  public static OneWayMessage decode(InputStream buf) throws IOException {
-    long limit = Encoders.Longs.decode(buf);
-    ManagedBuffer managedBuf = new InputStreamManagedBuffer(buf, limit, false);
+  public static OneWayMessage decode(InputStream in) throws IOException {
+    long limit = Encoders.Longs.decode(in);
+    ManagedBuffer managedBuf = new InputStreamManagedBuffer(in, limit, false);
     return new OneWayMessage(managedBuf);
   }
 

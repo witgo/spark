@@ -65,7 +65,7 @@ class NettyBlockRpcServer(
           val streamId = streamManager.registerStream(appId, blocks.iterator.asJava)
           logTrace(s"Registered streamId $streamId with ${blocks.size} buffers")
           val streamHandle = new StreamHandle(streamId, blocks.size)
-          responseContext.onSuccess(streamHandle.toChunkedByteBuffer)
+          responseContext.onSuccess(streamHandle.toByteBuffer)
 
         case uploadBlock: UploadBlock =>
           // StorageLevel and ClassTag are serialized as bytes using our JavaSerializer.

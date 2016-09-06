@@ -33,6 +33,7 @@ import static org.junit.Assert.*;
 import org.apache.spark.network.TestManagedBuffer;
 import org.apache.spark.network.buffer.ChunkedByteBuffer;
 import org.apache.spark.network.buffer.ChunkedByteBufferUtil;
+import org.apache.spark.network.buffer.InputStreamManagedBuffer;
 import org.apache.spark.network.buffer.ManagedBuffer;
 import org.apache.spark.network.buffer.NioManagedBuffer;
 import org.apache.spark.network.util.ByteArrayWritableChannel;
@@ -71,6 +72,19 @@ public class MessageWithHeaderSuite {
     assertTrue(msg.release());
     assertEquals(0, bodyPassedToNettyManagedBuffer.refCnt());
     assertEquals(0, header.refCnt());
+  }
+
+  @Test
+  public void testInputStreamBody() throws Exception {
+    ByteBuf header = Unpooled.copyLong(42);
+    ManagedBuffer managedBuf = new InputStreamManagedBuffer(new io.netty.buffer.
+        ByteBufInputStream(Unpooled.copyLong(8)), 8);
+    MessageWithHeader msg = new MessageWithHeader(managedBuf, header, managedBuf.convertToNetty(),
+        managedBuf.size());
+    ByteBuf result = doWrite(msg, 1);
+    assertEquals(managedBuf.refCnt(), 0);
+    assertEquals(result.readLong(), 42);
+    assertEquals(result.readLong(), 8);
   }
 
   @Test

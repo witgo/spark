@@ -1208,7 +1208,7 @@ class BlockManagerSuite extends SparkFunSuite with Matchers with BeforeAndAfterE
     assert(block.isDefined)
     block.foreach { b =>
       b.release()
-      assert(b.asInstanceOf[ReferenceCountedManagedBuffer].refCnt === 0)
+      assert(b.asInstanceOf[ReleasableManagedBuffer].refCnt === 0)
     }
     verify(mockBlockManagerMaster, times(2)).getLocations("item")
   }

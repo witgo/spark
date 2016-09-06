@@ -59,9 +59,9 @@ public final class ChunkFetchSuccess extends AbstractResponseMessage {
 
   /** Encoding does NOT include 'buffer' itself. See {@link MessageEncoder}. */
   @Override
-  public void encode(OutputStream buf) throws IOException {
-    streamChunkId.encode(buf);
-    Encoders.Longs.encode(buf, body().size());
+  public void encode(OutputStream out) throws IOException {
+    streamChunkId.encode(out);
+    Encoders.Longs.encode(out, body().size());
   }
 
   @Override

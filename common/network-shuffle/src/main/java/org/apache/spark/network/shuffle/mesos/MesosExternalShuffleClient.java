@@ -18,7 +18,6 @@
 package org.apache.spark.network.shuffle.mesos;
 
 import java.io.IOException;
-import java.nio.ByteBuffer;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -74,7 +73,7 @@ public class MesosExternalShuffleClient extends ExternalShuffleClient {
 
     checkInit();
     ChunkedByteBuffer registerDriver = new RegisterDriver(appId, heartbeatTimeoutMs).
-        toChunkedByteBuffer();
+        toByteBuffer();
     TransportClient client = clientFactory.createClient(host, port);
     client.sendRpc(registerDriver, new RegisterDriverCallback(client, heartbeatIntervalMs));
   }
@@ -119,7 +118,7 @@ public class MesosExternalShuffleClient extends ExternalShuffleClient {
     @Override
     public void run() {
       // TODO: Stop sending heartbeats if the shuffle service has lost the app due to timeout
-      client.send(new ShuffleServiceHeartbeat(appId).toChunkedByteBuffer());
+      client.send(new ShuffleServiceHeartbeat(appId).toByteBuffer());
     }
   }
 }

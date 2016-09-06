@@ -571,7 +571,7 @@ private[spark] class BlockManager(
           if (out.size() != dataSize) {
             throw new SparkException(s"buffer size ${out.size()} but expected $dataSize")
           }
-          new ReferenceCountedManagedBuffer(out.toChunkedByteBuffer, () =>
+          new ReleasableManagedBuffer(out.toChunkedByteBuffer, () =>
             memoryManager.releaseUnrollMemory(dataSize, MemoryMode.ON_HEAP))
         } else {
           val (tempLocalBlockId, _) = diskBlockManager.createTempLocalBlock()
@@ -581,7 +581,7 @@ private[spark] class BlockManager(
             inputStream.close()
           }
           val onDeallocate: () => Unit = () => diskStore.remove(tempLocalBlockId)
-          new ReferenceCountedManagedBuffer(diskStore.getBlockData(tempLocalBlockId), onDeallocate)
+          new ReleasableManagedBuffer(diskStore.getBlockData(tempLocalBlockId), onDeallocate)
         }
       } catch {
         case NonFatal(e) =>

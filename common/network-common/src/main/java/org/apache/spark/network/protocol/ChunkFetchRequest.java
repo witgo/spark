@@ -42,12 +42,12 @@ public final class ChunkFetchRequest extends AbstractMessage implements RequestM
   }
 
   @Override
-  public void encode(OutputStream buf) throws IOException {
-    streamChunkId.encode(buf);
+  public void encode(OutputStream out) throws IOException {
+    streamChunkId.encode(out);
   }
 
-  public static ChunkFetchRequest decode(InputStream buf) throws IOException {
-    return new ChunkFetchRequest(StreamChunkId.decode(buf));
+  public static ChunkFetchRequest decode(InputStream in) throws IOException {
+    return new ChunkFetchRequest(StreamChunkId.decode(in));
   }
 
   @Override

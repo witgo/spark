@@ -40,7 +40,7 @@ public class BlockTransferMessagesSuite {
 
   private void checkSerializeDeserialize(BlockTransferMessage msg) throws IOException {
     BlockTransferMessage msg2 = BlockTransferMessage.Decoder.
-        fromByteBuffer(msg.toChunkedByteBuffer());
+        fromByteBuffer(msg.toByteBuffer());
     assertEquals(msg, msg2);
     assertEquals(msg.hashCode(), msg2.hashCode());
     assertEquals(msg.toString(), msg2.toString());

@@ -30,8 +30,8 @@ class KryoSerializerResizableOutputSuite extends SparkFunSuite {
   ignore("kryo without resizable output buffer should fail on large array") {
     val conf = new SparkConf(false)
     conf.set("spark.serializer", "org.apache.spark.serializer.KryoSerializer")
-    conf.set("spark.kryoserializer.buffer", "0")
-    conf.set("spark.kryoserializer.buffer.max", "0")
+    conf.set("spark.kryoserializer.buffer", "1m")
+    conf.set("spark.kryoserializer.buffer.max", "1m")
     val sc = new SparkContext("local", "test", conf)
     intercept[SparkException](sc.parallelize(x).collect())
     LocalSparkContext.stop(sc)

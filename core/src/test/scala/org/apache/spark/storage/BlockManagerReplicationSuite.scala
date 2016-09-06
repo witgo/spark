@@ -110,10 +110,240 @@ class BlockManagerReplicationSuite extends SparkFunSuite
     master = null
   }
 
+
+  test("get peers with addition and removal of block managers") {
+    val numStores = 4
+    val stores = (1 to numStores - 1).map { i => makeBlockManager(1000, s"store$i") }
+    val storeIds = stores.map { _.blockManagerId }.toSet
+    assert(master.getPeers(stores(0).blockManagerId).toSet ===
+      storeIds.filterNot { _ == stores(0).blockManagerId })
+    assert(master.getPeers(stores(1).blockManagerId).toSet ===
+      storeIds.filterNot { _ == stores(1).blockManagerId })
+    assert(master.getPeers(stores(2).blockManagerId).toSet ===
+      storeIds.filterNot { _ == stores(2).blockManagerId })
+
+    // Add driver store and test whether it is filtered out
+    val driverStore = makeBlockManager(1000, SparkContext.DRIVER_IDENTIFIER)
+    assert(master.getPeers(stores(0).blockManagerId).forall(!_.isDriver))
+    assert(master.getPeers(stores(1).blockManagerId).forall(!_.isDriver))
+    assert(master.getPeers(stores(2).blockManagerId).forall(!_.isDriver))
+
+    // Add a new store and test whether get peers returns it
+    val newStore = makeBlockManager(1000, s"store$numStores")
+    assert(master.getPeers(stores(0).blockManagerId).toSet ===
+      storeIds.filterNot { _ == stores(0).blockManagerId } + newStore.blockManagerId)
+    assert(master.getPeers(stores(1).blockManagerId).toSet ===
+      storeIds.filterNot { _ == stores(1).blockManagerId } + newStore.blockManagerId)
+    assert(master.getPeers(stores(2).blockManagerId).toSet ===
+      storeIds.filterNot { _ == stores(2).blockManagerId } + newStore.blockManagerId)
+    assert(master.getPeers(newStore.blockManagerId).toSet === storeIds)
+
+    // Remove a store and test whether get peers returns it
+    val storeIdToRemove = stores(0).blockManagerId
+    master.removeExecutor(storeIdToRemove.executorId)
+    assert(!master.getPeers(stores(1).blockManagerId).contains(storeIdToRemove))
+    assert(!master.getPeers(stores(2).blockManagerId).contains(storeIdToRemove))
+    assert(!master.getPeers(newStore.blockManagerId).contains(storeIdToRemove))
+
+    // Test whether asking for peers of a unregistered block manager id returns empty list
+    assert(master.getPeers(stores(0).blockManagerId).isEmpty)
+    assert(master.getPeers(BlockManagerId("", "", 1)).isEmpty)
+  }
+
+
   test("block replication - 2x replication") {
     testReplication(2,
-      Seq(MEMORY_AND_DISK_SER_2)
+      Seq(MEMORY_ONLY, MEMORY_ONLY_SER, DISK_ONLY, MEMORY_AND_DISK_2, MEMORY_AND_DISK_SER_2)
     )
+  }
+
+  test("block replication - 3x replication") {
+    // Generate storage levels with 3x replication
+    val storageLevels = {
+      Seq(MEMORY_ONLY, MEMORY_ONLY_SER, DISK_ONLY, MEMORY_AND_DISK, MEMORY_AND_DISK_SER).map {
+        level => StorageLevel(
+          level.useDisk, level.useMemory, level.useOffHeap, level.deserialized, 3)
+      }
+    }
+    testReplication(3, storageLevels)
+  }
+
+  test("block replication - mixed between 1x to 5x") {
+    // Generate storage levels with varying replication
+    val storageLevels = Seq(
+      MEMORY_ONLY,
+      MEMORY_ONLY_SER_2,
+      StorageLevel(true, false, false, false, 3),
+      StorageLevel(true, true, false, true, 4),
+      StorageLevel(true, true, false, false, 5),
+      StorageLevel(true, true, false, true, 4),
+      StorageLevel(true, false, false, false, 3),
+      MEMORY_ONLY_SER_2,
+      MEMORY_ONLY
+    )
+    testReplication(5, storageLevels)
+  }
+
+  test("block replication - off-heap") {
+    testReplication(2, Seq(OFF_HEAP, StorageLevel(true, true, true, false, 2)))
+  }
+
+  test("block replication - 2x replication without peers") {
+    intercept[org.scalatest.exceptions.TestFailedException] {
+      testReplication(1,
+        Seq(StorageLevel.MEMORY_AND_DISK_2, StorageLevel(true, false, false, false, 3)))
+    }
+  }
+
+  test("block replication - deterministic node selection") {
+    val blockSize = 1000
+    val storeSize = 10000
+    val stores = (1 to 5).map {
+      i => makeBlockManager(storeSize, s"store$i")
+    }
+    val storageLevel2x = StorageLevel.MEMORY_AND_DISK_2
+    val storageLevel3x = StorageLevel(true, true, false, true, 3)
+    val storageLevel4x = StorageLevel(true, true, false, true, 4)
+
+    def putBlockAndGetLocations(blockId: String, level: StorageLevel): Set[BlockManagerId] = {
+      stores.head.putSingle(blockId, new Array[Byte](blockSize), level)
+      val locations = master.getLocations(blockId).sortBy { _.executorId }.toSet
+      stores.foreach { _.removeBlock(blockId) }
+      master.removeBlock(blockId)
+      locations
+    }
+
+    // Test if two attempts to 2x replication returns same set of locations
+    val a1Locs = putBlockAndGetLocations("a1", storageLevel2x)
+    assert(putBlockAndGetLocations("a1", storageLevel2x) === a1Locs,
+      "Inserting a 2x replicated block second time gave different locations from the first")
+
+    // Test if two attempts to 3x replication returns same set of locations
+    val a2Locs3x = putBlockAndGetLocations("a2", storageLevel3x)
+    assert(putBlockAndGetLocations("a2", storageLevel3x) === a2Locs3x,
+      "Inserting a 3x replicated block second time gave different locations from the first")
+
+    // Test if 2x replication of a2 returns a strict subset of the locations of 3x replication
+    val a2Locs2x = putBlockAndGetLocations("a2", storageLevel2x)
+    assert(
+      a2Locs2x.subsetOf(a2Locs3x),
+      "Inserting a with 2x replication gave locations that are not a subset of locations" +
+        s" with 3x replication [3x: ${a2Locs3x.mkString(",")}; 2x: ${a2Locs2x.mkString(",")}"
+    )
+
+    // Test if 4x replication of a2 returns a strict superset of the locations of 3x replication
+    val a2Locs4x = putBlockAndGetLocations("a2", storageLevel4x)
+    assert(
+      a2Locs3x.subsetOf(a2Locs4x),
+      "Inserting a with 4x replication gave locations that are not a superset of locations " +
+        s"with 3x replication [3x: ${a2Locs3x.mkString(",")}; 4x: ${a2Locs4x.mkString(",")}"
+    )
+
+    // Test if 3x replication of two different blocks gives two different sets of locations
+    val a3Locs3x = putBlockAndGetLocations("a3", storageLevel3x)
+    assert(a3Locs3x !== a2Locs3x, "Two blocks gave same locations with 3x replication")
+  }
+
+  test("block replication - replication failures") {
+    /*
+      Create a system of three block managers / stores. One of them (say, failableStore)
+      cannot receive blocks. So attempts to use that as replication target fails.
+
+            +-----------/fails/-----------> failableStore
+            |
+        normalStore
+            |
+            +-----------/works/-----------> anotherNormalStore
+
+        We are first going to add a normal block manager (i.e. normalStore) and the failable block
+        manager (i.e. failableStore), and test whether 2x replication fails to create two
+        copies of a block. Then we are going to add another normal block manager
+        (i.e., anotherNormalStore), and test that now 2x replication works as the
+        new store will be used for replication.
+     */
+
+    // Add a normal block manager
+    val store = makeBlockManager(10000, "store")
+
+    // Insert a block with 2x replication and return the number of copies of the block
+    def replicateAndGetNumCopies(blockId: String): Int = {
+      store.putSingle(blockId, new Array[Byte](1000), StorageLevel.MEMORY_AND_DISK_2)
+      val numLocations = master.getLocations(blockId).size
+      allStores.foreach { _.removeBlock(blockId) }
+      numLocations
+    }
+
+    // Add a failable block manager with a mock transfer service that does not
+    // allow receiving of blocks. So attempts to use it as a replication target will fail.
+    val failableTransfer = mock(classOf[BlockTransferService]) // this wont actually work
+    when(failableTransfer.hostName).thenReturn("some-hostname")
+    when(failableTransfer.port).thenReturn(1000)
+    conf.set("spark.testing.memory", "10000")
+    val memManager = UnifiedMemoryManager(conf, numCores = 1)
+    val serializerManager = new SerializerManager(serializer, conf)
+    val failableStore = new BlockManager("failable-store", rpcEnv, master, serializerManager, conf,
+      memManager, mapOutputTracker, shuffleManager, failableTransfer, securityMgr, 0)
+    memManager.setMemoryStore(failableStore.memoryStore)
+    failableStore.initialize("app-id")
+    allStores += failableStore // so that this gets stopped after test
+    assert(master.getPeers(store.blockManagerId).toSet === Set(failableStore.blockManagerId))
+
+    // Test that 2x replication fails by creating only one copy of the block
+    assert(replicateAndGetNumCopies("a1") === 1)
+
+    // Add another normal block manager and test that 2x replication works
+    makeBlockManager(10000, "anotherStore")
+    eventually(timeout(1000 milliseconds), interval(10 milliseconds)) {
+      assert(replicateAndGetNumCopies("a2") === 2)
+    }
+  }
+
+  test("block replication - addition and deletion of block managers") {
+    val blockSize = 1000
+    val storeSize = 10000
+    val initialStores = (1 to 2).map { i => makeBlockManager(storeSize, s"store$i") }
+
+    // Insert a block with given replication factor and return the number of copies of the block\
+    def replicateAndGetNumCopies(blockId: String, replicationFactor: Int): Int = {
+      val storageLevel = StorageLevel(true, true, false, true, replicationFactor)
+      initialStores.head.putSingle(blockId, new Array[Byte](blockSize), storageLevel)
+      val numLocations = master.getLocations(blockId).size
+      allStores.foreach { _.removeBlock(blockId) }
+      numLocations
+    }
+
+    // 2x replication should work, 3x replication should only replicate 2x
+    assert(replicateAndGetNumCopies("a1", 2) === 2)
+    assert(replicateAndGetNumCopies("a2", 3) === 2)
+
+    // Add another store, 3x replication should work now, 4x replication should only replicate 3x
+    val newStore1 = makeBlockManager(storeSize, s"newstore1")
+    eventually(timeout(1000 milliseconds), interval(10 milliseconds)) {
+      assert(replicateAndGetNumCopies("a3", 3) === 3)
+    }
+    assert(replicateAndGetNumCopies("a4", 4) === 3)
+
+    // Add another store, 4x replication should work now
+    val newStore2 = makeBlockManager(storeSize, s"newstore2")
+    eventually(timeout(1000 milliseconds), interval(10 milliseconds)) {
+      assert(replicateAndGetNumCopies("a5", 4) === 4)
+    }
+
+    // Remove all but the 1st store, 2x replication should fail
+    (initialStores.tail ++ Seq(newStore1, newStore2)).foreach {
+      store =>
+        master.removeExecutor(store.blockManagerId.executorId)
+        store.stop()
+    }
+    assert(replicateAndGetNumCopies("a6", 2) === 1)
+
+    // Add new stores, 3x replication should work
+    val newStores = (3 to 5).map {
+      i => makeBlockManager(storeSize, s"newstore$i")
+    }
+    eventually(timeout(1000 milliseconds), interval(10 milliseconds)) {
+      assert(replicateAndGetNumCopies("a7", 3) === 3)
+    }
   }
 
   /**

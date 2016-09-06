@@ -18,7 +18,6 @@
 package org.apache.spark.network.shuffle;
 
 import java.io.IOException;
-import java.nio.ByteBuffer;
 import java.util.List;
 
 import com.google.common.base.Preconditions;
@@ -142,7 +141,7 @@ public class ExternalShuffleClient extends ShuffleClient {
     TransportClient client = clientFactory.createUnmanagedClient(host, port);
     try {
       ChunkedByteBuffer registerMessage = new RegisterExecutor(appId, execId, executorInfo).
-          toChunkedByteBuffer();
+          toByteBuffer();
       client.sendRpcSync(registerMessage, 5000 /* timeoutMs */);
     } finally {
       client.close();

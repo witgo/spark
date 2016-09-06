@@ -116,7 +116,7 @@ public class ExternalShuffleBlockHandler extends RpcHandler {
                        client.getClientId(),
                        getRemoteAddress(client.getChannel()));
         }
-        callback.onSuccess(new StreamHandle(streamId, msg.blockIds.length).toChunkedByteBuffer());
+        callback.onSuccess(new StreamHandle(streamId, msg.blockIds.length).toByteBuffer());
         metrics.blockTransferRateBytes.mark(totalBlockSize);
       } finally {
         responseDelayContext.stop();

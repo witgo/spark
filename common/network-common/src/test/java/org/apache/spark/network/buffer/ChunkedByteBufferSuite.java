@@ -20,6 +20,7 @@ package org.apache.spark.network.buffer;
 
 import java.io.*;
 import java.nio.ByteBuffer;
+import java.util.Arrays;
 import java.util.Random;
 
 import org.junit.Test;
@@ -116,6 +117,31 @@ public class ChunkedByteBufferSuite {
     in.readFully(arr);
     assertEquals(arr[12], bytes2[7]);
     assertEquals(arr[4], bytes1[4]);
+  }
+
+  @Test
+  public void derivedChunkedByteBuffer() throws Exception {
+    byte[] bytes1 = new byte[5];
+    byte[] bytes2 = new byte[8];
+    byte[] bytes3 = new byte[12];
+    rad.nextBytes(bytes1);
+    rad.nextBytes(bytes2);
+    rad.nextBytes(bytes3);
+    ChunkedByteBuffer chunkedByteBuffer = ChunkedByteBufferUtil.wrap(new ByteBuffer[]{
+        ByteBuffer.wrap(bytes1), ByteBuffer.wrap(bytes2), ByteBuffer.wrap(bytes3)});
+
+    ChunkedByteBuffer sliceBuffer = chunkedByteBuffer.slice(4, 12);
+    assertEquals(sliceBuffer.toByteBuffers().length, 3);
+    assertArrayEquals(Arrays.copyOfRange(chunkedByteBuffer.toArray(), 4, 12), sliceBuffer.toArray());
+
+    ChunkedByteBuffer dupBufferBuffer = sliceBuffer.duplicate();
+    assertEquals(dupBufferBuffer.size(), 12);
+
+    assertArrayEquals(dupBufferBuffer.toArray(), sliceBuffer.toArray());
+
+    dupBufferBuffer.release();
+    assertEquals(chunkedByteBuffer.refCnt(), 0);
+
   }
 
   @Test

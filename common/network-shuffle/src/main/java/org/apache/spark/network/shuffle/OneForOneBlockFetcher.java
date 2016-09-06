@@ -17,8 +17,6 @@
 
 package org.apache.spark.network.shuffle;
 
-import java.io.IOException;
-import java.nio.ByteBuffer;
 import java.util.Arrays;
 
 import org.slf4j.Logger;
@@ -92,7 +90,7 @@ public class OneForOneBlockFetcher {
       throw new IllegalArgumentException("Zero-sized blockIds array");
     }
 
-    client.sendRpc(openMessage.toChunkedByteBuffer(), new RpcResponseCallback() {
+    client.sendRpc(openMessage.toByteBuffer(), new RpcResponseCallback() {
       @Override
       public void onSuccess(ChunkedByteBuffer response) {
         try {

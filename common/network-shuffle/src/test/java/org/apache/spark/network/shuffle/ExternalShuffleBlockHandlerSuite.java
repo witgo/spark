@@ -65,7 +65,7 @@ public class ExternalShuffleBlockHandlerSuite {
 
     ExecutorShuffleInfo config = new ExecutorShuffleInfo(new String[] {"/a", "/b"}, 16, "sort");
     ChunkedByteBuffer registerMessage = new RegisterExecutor("app0", "exec1", config).
-        toChunkedByteBuffer();
+        toByteBuffer();
     handler.receive(client, registerMessage.toInputStream(), callback);
     verify(blockResolver, times(1)).registerExecutor("app0", "exec1", config);
 
@@ -89,7 +89,7 @@ public class ExternalShuffleBlockHandlerSuite {
     when(blockResolver.getBlockData("app0", "exec1", "b0")).thenReturn(block0Marker);
     when(blockResolver.getBlockData("app0", "exec1", "b1")).thenReturn(block1Marker);
     ChunkedByteBuffer openBlocks = new OpenBlocks("app0", "exec1", new String[] { "b0", "b1" })
-      .toChunkedByteBuffer();
+      .toByteBuffer();
     handler.receive(client, openBlocks.toInputStream(), callback);
     verify(blockResolver, times(1)).getBlockData("app0", "exec1", "b0");
     verify(blockResolver, times(1)).getBlockData("app0", "exec1", "b1");
@@ -139,7 +139,7 @@ public class ExternalShuffleBlockHandlerSuite {
     }
 
     ChunkedByteBuffer unexpectedMsg = new UploadBlock("a", "e", "b", new byte[1],
-        new NioManagedBuffer(ChunkedByteBufferUtil.wrap(new byte[2]))).toChunkedByteBuffer();
+        new NioManagedBuffer(ChunkedByteBufferUtil.wrap(new byte[2]))).toByteBuffer();
     try {
       handler.receive(client, unexpectedMsg.toInputStream(), callback);
       fail("Should have thrown");

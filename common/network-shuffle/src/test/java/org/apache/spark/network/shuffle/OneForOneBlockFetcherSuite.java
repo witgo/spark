@@ -136,7 +136,7 @@ public class OneForOneBlockFetcherSuite {
         BlockTransferMessage message = BlockTransferMessage.Decoder.fromByteBuffer(
           (ChunkedByteBuffer) invocationOnMock.getArguments()[0]);
         RpcResponseCallback callback = (RpcResponseCallback) invocationOnMock.getArguments()[1];
-        callback.onSuccess(new StreamHandle(123, blocks.size()).toChunkedByteBuffer());
+        callback.onSuccess(new StreamHandle(123, blocks.size()).toByteBuffer());
         assertEquals(new OpenBlocks("app-id", "exec-id", blockIds), message);
         return null;
       }

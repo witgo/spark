@@ -44,14 +44,14 @@ public final class ChunkFetchFailure extends AbstractMessage implements Response
   }
 
   @Override
-  public void encode(OutputStream buf) throws IOException {
-    streamChunkId.encode(buf);
-    Encoders.Strings.encode(buf, errorString);
+  public void encode(OutputStream out) throws IOException {
+    streamChunkId.encode(out);
+    Encoders.Strings.encode(out, errorString);
   }
 
-  public static ChunkFetchFailure decode(InputStream buf) throws IOException {
-    StreamChunkId streamChunkId = StreamChunkId.decode(buf);
-    String errorString = Encoders.Strings.decode(buf);
+  public static ChunkFetchFailure decode(InputStream in) throws IOException {
+    StreamChunkId streamChunkId = StreamChunkId.decode(in);
+    String errorString = Encoders.Strings.decode(in);
     return new ChunkFetchFailure(streamChunkId, errorString);
   }
 
