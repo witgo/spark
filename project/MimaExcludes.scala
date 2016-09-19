@@ -815,6 +815,15 @@ object MimaExcludes {
     ) ++ Seq(
       // [SPARK-17163] Unify logistic regression interface. Private constructor has new signature.
       ProblemFilters.exclude[DirectMissingMethodProblem]("org.apache.spark.ml.classification.LogisticRegressionModel.this")
+    ) ++ Seq(
+      // [SPARK-6235] Address various 2G limits
+      ProblemFilters.exclude[IncompatibleMethTypeProblem]("org.apache.spark.network.netty.NettyBlockRpcServer.receive"),
+      ProblemFilters.exclude[IncompatibleResultTypeProblem]("org.apache.spark.serializer.DummySerializerInstance.serialize"),
+      ProblemFilters.exclude[IncompatibleMethTypeProblem]("org.apache.spark.serializer.DummySerializerInstance.deserialize"),
+      ProblemFilters.exclude[IncompatibleResultTypeProblem]("org.apache.spark.serializer.SerializerInstance.serialize"),
+      ProblemFilters.exclude[ReversedMissingMethodProblem]("org.apache.spark.serializer.SerializerInstance.serialize"),
+      ProblemFilters.exclude[IncompatibleMethTypeProblem]("org.apache.spark.serializer.SerializerInstance.deserialize"),
+      ProblemFilters.exclude[ReversedMissingMethodProblem]("org.apache.spark.serializer.SerializerInstance.deserialize")
     )
   }
 
