@@ -23,10 +23,11 @@ import java.util.Map;
 import java.util.Queue;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
-import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicLongFieldUpdater;
 
 import com.google.common.annotations.VisibleForTesting;
 import io.netty.channel.Channel;
+import io.netty.util.internal.PlatformDependent;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -62,15 +63,30 @@ public class TransportResponseHandler extends MessageHandler<ResponseMessage> {
   private final Queue<StreamCallback> streamCallbacks;
   private volatile boolean streamActive;
 
-  /** Records the time (in system nanoseconds) that the last fetch or RPC request was sent. */
-  private final AtomicLong timeOfLastRequestNs;
+  private static final AtomicLongFieldUpdater<TransportResponseHandler> lastUpdateTimeNsUpdater;
+
+  static {
+    AtomicLongFieldUpdater<TransportResponseHandler> updater =
+        PlatformDependent.newAtomicLongFieldUpdater(TransportResponseHandler.class,
+            "lastReceivedOrSentTimeNs");
+    if (updater == null) {
+      updater = AtomicLongFieldUpdater.newUpdater(TransportResponseHandler.class,
+          "lastReceivedOrSentTimeNs");
+    }
+    lastUpdateTimeNsUpdater = updater;
+  }
+
+  /**
+   * Records the time (in system nanoseconds) that the last fetch or RPC request was received or sent.
+   */
+  private volatile long lastReceivedOrSentTimeNs = 1;
 
   public TransportResponseHandler(Channel channel) {
     this.channel = channel;
     this.outstandingFetches = new ConcurrentHashMap<>();
     this.outstandingRpcs = new ConcurrentHashMap<>();
     this.streamCallbacks = new ConcurrentLinkedQueue<>();
-    this.timeOfLastRequestNs = new AtomicLong(0);
+    this.lastReceivedOrSentTimeNs = 0L;
   }
 
   public void addFetchRequest(StreamChunkId streamChunkId, ChunkReceivedCallback callback) {
@@ -92,7 +108,7 @@ public class TransportResponseHandler extends MessageHandler<ResponseMessage> {
   }
 
   public void addStreamCallback(StreamCallback callback) {
-    timeOfLastRequestNs.set(System.nanoTime());
+    updateTimeOfLastRequest();
     streamCallbacks.offer(callback);
   }
 
@@ -144,6 +160,7 @@ public class TransportResponseHandler extends MessageHandler<ResponseMessage> {
 
   @Override
   public void handle(ResponseMessage message) throws Exception {
+    updateTimeOfLastRequest();
     if (message instanceof ChunkFetchSuccess) {
       final ChunkFetchSuccess resp = (ChunkFetchSuccess) message;
       final ChunkReceivedCallback listener = outstandingFetches.get(resp.streamChunkId);
@@ -246,12 +263,18 @@ public class TransportResponseHandler extends MessageHandler<ResponseMessage> {
 
   /** Returns the time in nanoseconds of when the last request was sent out. */
   public long getTimeOfLastRequestNs() {
-    return timeOfLastRequestNs.get();
+    return lastReceivedOrSentTimeNs;
   }
 
   /** Updates the time of the last request to the current system time. */
   public void updateTimeOfLastRequest() {
-    timeOfLastRequestNs.set(System.nanoTime());
+    long ns = System.nanoTime();
+    for (; ; ) {
+      long os = lastReceivedOrSentTimeNs;
+      if (lastUpdateTimeNsUpdater.compareAndSet(this, os, ns)) {
+        break;
+      }
+    }
   }
 
   private void handleChunkFetchSuccessWithoutBodyInFrame(
