@@ -35,6 +35,7 @@ import org.apache.spark.internal.Logging
 import org.apache.spark.memory.TaskMemoryManager
 import org.apache.spark.rpc.RpcTimeout
 import org.apache.spark.scheduler._
+import org.apache.spark.serializer.SerializerInstance
 import org.apache.spark.shuffle.FetchFailedException
 import org.apache.spark.storage.{StorageLevel, TaskResultBlockId}
 import org.apache.spark.util._
@@ -61,6 +62,16 @@ private[spark] class Executor(
   // Each map holds the master's timestamp for the version of that file or JAR we got.
   private val currentFiles: HashMap[String, Long] = new HashMap[String, Long]()
   private val currentJars: HashMap[String, Long] = new HashMap[String, Long]()
+  private val closureSerializer = new ThreadLocal[SerializerInstance] {
+    override def initialValue(): SerializerInstance = {
+      env.closureSerializer.newInstance()
+    }
+  }
+  private val resultSerializer = new ThreadLocal[SerializerInstance] {
+    override def initialValue(): SerializerInstance = {
+      env.serializer.newInstance()
+    }
+  }
 
   private val EMPTY_BYTE_BUFFER = ByteBuffer.wrap(new Array[Byte](0))
 
@@ -239,7 +250,7 @@ private[spark] class Executor(
         threadMXBean.getCurrentThreadCpuTime
       } else 0L
       Thread.currentThread.setContextClassLoader(replClassLoader)
-      val ser = env.closureSerializer.newInstance()
+      val ser = closureSerializer.get()
       logInfo(s"Running $taskName (TID $taskId)")
       execBackend.statusUpdate(taskId, TaskState.RUNNING, EMPTY_BYTE_BUFFER)
       var taskStart: Long = 0
@@ -251,6 +262,7 @@ private[spark] class Executor(
         // requires access to properties contained within (e.g. for access control).
         Executor.taskDeserializationProps.set(taskProps)
         updateDependencies(taskFiles, taskJars)
+        val ser = closureSerializer.get()
         task = taskDesc.task(ser).asInstanceOf[Task[Any]]
         task.setTaskMemoryManager(taskMemoryManager)
 
@@ -314,7 +326,7 @@ private[spark] class Executor(
           throw new TaskKilledException
         }
 
-        val resultSer = env.serializer.newInstance()
+        val resultSer = resultSerializer.get()
         val beforeSerialization = System.currentTimeMillis()
         val valueBytes = resultSer.serialize(value)
         val afterSerialization = System.currentTimeMillis()
@@ -484,6 +496,7 @@ private[spark] class Executor(
   private def updateDependencies(newFiles: Map[String, Long], newJars: Map[String, Long]) {
     lazy val hadoopConf = SparkHadoopUtil.get.newConfiguration(conf)
     synchronized {
+      var isModified = false
       // Fetch missing dependencies
       for ((name, timestamp) <- newFiles if currentFiles.getOrElse(name, -1L) < timestamp) {
         logInfo("Fetching " + name + " with timestamp " + timestamp)
@@ -491,6 +504,7 @@ private[spark] class Executor(
         Utils.fetchFile(name, new File(SparkFiles.getRootDirectory()), conf,
           env.securityManager, hadoopConf, timestamp, useCache = !isLocal)
         currentFiles(name) = timestamp
+        isModified = true
       }
       for ((name, timestamp) <- newJars) {
         val localName = name.split("/").last
@@ -508,9 +522,18 @@ private[spark] class Executor(
           if (!urlClassLoader.getURLs().contains(url)) {
             logInfo("Adding " + url + " to class loader")
             urlClassLoader.addURL(url)
+            isModified = true
           }
         }
       }
+      resetSerializer(isModified)
+    }
+  }
+
+  private def resetSerializer(isModified: Boolean): Unit = {
+    if (isModified) {
+      closureSerializer.remove()
+      resultSerializer.remove()
     }
   }
 
