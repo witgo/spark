@@ -24,6 +24,7 @@ import javax.annotation.concurrent.GuardedBy
 import scala.collection.mutable.{ArrayBuffer, HashMap, HashSet}
 import scala.concurrent.Future
 import scala.concurrent.duration.Duration
+import scala.util.control.NonFatal
 
 import org.apache.spark.{ExecutorAllocationClient, SparkEnv, SparkException, TaskState}
 import org.apache.spark.internal.Logging
@@ -247,28 +248,36 @@ class CoarseGrainedSchedulerBackend(scheduler: TaskSchedulerImpl, val rpcEnv: Rp
     // Launch tasks returned by a set of resource offers
     private def launchTasks(tasks: Seq[Seq[TaskDescription]]) {
       for (task <- tasks.flatten) {
-        val serializedTask = ser.serialize(task)
-        if (serializedTask.limit >= maxRpcMessageSize) {
-          scheduler.taskIdToTaskSetManager.get(task.taskId).foreach { taskSetMgr =>
-            try {
-              var msg = "Serialized task %s:%d was %d bytes, which exceeds max allowed: " +
-                "spark.rpc.message.maxSize (%d bytes). Consider increasing " +
-                "spark.rpc.message.maxSize or using broadcast variables for large values."
-              msg = msg.format(task.taskId, task.index, serializedTask.limit, maxRpcMessageSize)
-              taskSetMgr.abort(msg)
-            } catch {
-              case e: Exception => logError("Exception in error callback", e)
+        try {
+          val serializedTask = task.encode(ser)
+          if (serializedTask.limit >= maxRpcMessageSize) {
+            scheduler.taskIdToTaskSetManager.get(task.taskId).foreach { taskSetMgr =>
+              try {
+                var msg = "Serialized task %s:%d was %d bytes, which exceeds max allowed: " +
+                  "spark.rpc.message.maxSize (%d bytes). Consider increasing " +
+                  "spark.rpc.message.maxSize or using broadcast variables for large values."
+                msg = msg.format(task.taskId, task.index, serializedTask.limit, maxRpcMessageSize)
+                taskSetMgr.abort(msg)
+              } catch {
+                case e: Exception => logError("Exception in error callback", e)
+              }
             }
+          } else {
+            val executorData = executorDataMap(task.executorId)
+            executorData.freeCores -= scheduler.CPUS_PER_TASK
+
+            logDebug(s"Launching task ${task.taskId} on executor id: ${task.executorId} " +
+              s" hostname: ${executorData.executorHost}.")
+
+            executorData.executorEndpoint.send(LaunchTask(new SerializableBuffer(serializedTask)))
           }
-        }
-        else {
-          val executorData = executorDataMap(task.executorId)
-          executorData.freeCores -= scheduler.CPUS_PER_TASK
-
-          logDebug(s"Launching task ${task.taskId} on executor id: ${task.executorId} hostname: " +
-            s"${executorData.executorHost}.")
-
-          executorData.executorEndpoint.send(LaunchTask(new SerializableBuffer(serializedTask)))
+        } catch {
+          case NonFatal(e) =>
+            scheduler.taskIdToTaskSetManager.get(task.taskId).foreach { taskSetMgr =>
+              taskSetMgr.abort(
+                s"Failed to serialize task ${task.taskId}, not attempting to retry it.",
+                Some(e))
+            }
         }
       }
     }

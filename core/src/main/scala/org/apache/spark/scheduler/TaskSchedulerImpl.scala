@@ -258,23 +258,15 @@ private[spark] class TaskSchedulerImpl(
       val execId = shuffledOffers(i).executorId
       val host = shuffledOffers(i).host
       if (availableCpus(i) >= CPUS_PER_TASK) {
-        try {
-          for (task <- taskSet.resourceOffer(execId, host, maxLocality)) {
-            tasks(i) += task
-            val tid = task.taskId
-            taskIdToTaskSetManager(tid) = taskSet
-            taskIdToExecutorId(tid) = execId
-            executorIdToTaskCount(execId) += 1
-            availableCpus(i) -= CPUS_PER_TASK
-            assert(availableCpus(i) >= 0)
-            launchedTask = true
-          }
-        } catch {
-          case e: TaskNotSerializableException =>
-            logError(s"Resource offer failed, task set ${taskSet.name} was not serializable")
-            // Do not offer resources for this task, but don't throw an error to allow other
-            // task sets to be submitted.
-            return launchedTask
+        for (task <- taskSet.resourceOffer(execId, host, maxLocality)) {
+          tasks(i) += task
+          val tid = task.taskId
+          taskIdToTaskSetManager(tid) = taskSet
+          taskIdToExecutorId(tid) = execId
+          executorIdToTaskCount(execId) += 1
+          availableCpus(i) -= CPUS_PER_TASK
+          assert(availableCpus(i) >= 0)
+          launchedTask = true
         }
       }
     }

@@ -24,13 +24,11 @@ import org.apache.spark.SparkFunSuite
 class MesosTaskLaunchDataSuite extends SparkFunSuite {
   test("serialize and deserialize data must be same") {
     val serializedTask = ByteBuffer.allocate(40)
-    (Range(100, 110).map(serializedTask.putInt(_)))
+    Range(100, 110).foreach(serializedTask.putInt)
     serializedTask.rewind
-    val attemptNumber = 100
-    val byteString = MesosTaskLaunchData(serializedTask, attemptNumber).toByteString
+    val byteString = MesosTaskLaunchData(serializedTask).toByteString
     serializedTask.rewind
     val mesosTaskLaunchData = MesosTaskLaunchData.fromByteString(byteString)
-    assert(mesosTaskLaunchData.attemptNumber == attemptNumber)
     assert(mesosTaskLaunchData.serializedTask.equals(serializedTask))
   }
 }

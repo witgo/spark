@@ -50,10 +50,6 @@ private[spark] class CoarseGrainedExecutorBackend(
   var executor: Executor = null
   @volatile var driver: Option[RpcEndpointRef] = None
 
-  // If this CoarseGrainedExecutorBackend is changed to support multiple threads, then this may need
-  // to be changed so that we don't share the serializer instance across threads
-  private[this] val ser: SerializerInstance = env.closureSerializer.newInstance()
-
   override def onStart() {
     logInfo("Connecting to driver: " + driverUrl)
     rpcEnv.asyncSetupEndpointRefByURI(driverUrl).flatMap { ref =>
@@ -92,10 +88,9 @@ private[spark] class CoarseGrainedExecutorBackend(
       if (executor == null) {
         exitExecutor(1, "Received LaunchTask command but executor was null")
       } else {
-        val taskDesc = ser.deserialize[TaskDescription](data.value)
+        val taskDesc = TaskDescription.decode(data.value)
         logInfo("Got assigned task " + taskDesc.taskId)
-        executor.launchTask(this, taskId = taskDesc.taskId, attemptNumber = taskDesc.attemptNumber,
-          taskDesc.name, taskDesc.serializedTask)
+        executor.launchTask(this, taskDesc)
       }
 
     case KillTask(taskId, _, interruptThread) =>
