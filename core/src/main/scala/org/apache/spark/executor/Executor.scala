@@ -26,7 +26,7 @@ import java.util.concurrent.{ConcurrentHashMap, TimeUnit}
 import javax.annotation.concurrent.GuardedBy
 
 import scala.collection.JavaConverters._
-import scala.collection.mutable.{ArrayBuffer, HashMap}
+import scala.collection.mutable.{ArrayBuffer, HashMap, Map}
 import scala.util.control.NonFatal
 
 import org.apache.spark._
@@ -34,7 +34,7 @@ import org.apache.spark.deploy.SparkHadoopUtil
 import org.apache.spark.internal.Logging
 import org.apache.spark.memory.TaskMemoryManager
 import org.apache.spark.rpc.RpcTimeout
-import org.apache.spark.scheduler.{AccumulableInfo, DirectTaskResult, IndirectTaskResult, Task}
+import org.apache.spark.scheduler._
 import org.apache.spark.shuffle.FetchFailedException
 import org.apache.spark.storage.{StorageLevel, TaskResultBlockId}
 import org.apache.spark.util._
@@ -50,7 +50,7 @@ import org.apache.spark.util.io.ChunkedByteBuffer
 private[spark] class Executor(
     executorId: String,
     executorHostname: String,
-    env: SparkEnv,
+    val env: SparkEnv,
     userClassPath: Seq[URL] = Nil,
     isLocal: Boolean = false)
   extends Logging {
@@ -149,14 +149,10 @@ private[spark] class Executor(
   startDriverHeartbeater()
 
   def launchTask(
-      context: ExecutorBackend,
-      taskId: Long,
-      attemptNumber: Int,
-      taskName: String,
-      serializedTask: ByteBuffer): Unit = {
-    val tr = new TaskRunner(context, taskId = taskId, attemptNumber = attemptNumber, taskName,
-      serializedTask)
-    runningTasks.put(taskId, tr)
+    context: ExecutorBackend,
+    taskDesc: TaskDescription): Unit = {
+    val tr = new TaskRunner(context, taskDesc)
+    runningTasks.put(taskDesc.taskId, tr)
     threadPool.execute(tr)
   }
 
@@ -212,13 +208,10 @@ private[spark] class Executor(
 
   class TaskRunner(
       execBackend: ExecutorBackend,
-      val taskId: Long,
-      val attemptNumber: Int,
-      taskName: String,
-      serializedTask: ByteBuffer)
+      val taskDesc: TaskDescription)
     extends Runnable {
 
-    val threadName = s"Executor task launch worker for task $taskId"
+    val threadName = s"Executor task launch worker for task ${taskDesc.taskId}"
 
     /** Whether this task has been killed. */
     @volatile private var killed = false
@@ -243,7 +236,7 @@ private[spark] class Executor(
     @volatile var task: Task[Any] = _
 
     def kill(interruptThread: Boolean): Unit = {
-      logInfo(s"Executor is trying to kill $taskName (TID $taskId)")
+      logInfo(s"Executor is trying to kill ${taskDesc.name} (TID ${taskDesc.taskId})")
       killed = true
       if (task != null) {
         synchronized {
@@ -272,6 +265,13 @@ private[spark] class Executor(
     override def run(): Unit = {
       threadId = Thread.currentThread.getId
       Thread.currentThread.setName(threadName)
+      val taskId = taskDesc.taskId
+      val attemptNumber = taskDesc.attemptNumber
+      val taskName = taskDesc.name
+      val taskFiles = taskDesc.taskFiles
+      val taskJars = taskDesc.taskJars
+      val taskProps = taskDesc.taskProperties
+
       val threadMXBean = ManagementFactory.getThreadMXBean
       val taskMemoryManager = new TaskMemoryManager(env.memoryManager, taskId)
       val deserializeStartTime = System.currentTimeMillis()
@@ -287,16 +287,11 @@ private[spark] class Executor(
       startGCTime = computeTotalGcTime()
 
       try {
-        val (taskFiles, taskJars, taskProps, taskBytes) =
-          Task.deserializeWithDependencies(serializedTask)
-
         // Must be set before updateDependencies() is called, in case fetching dependencies
         // requires access to properties contained within (e.g. for access control).
         Executor.taskDeserializationProps.set(taskProps)
-
         updateDependencies(taskFiles, taskJars)
-        task = ser.deserialize[Task[Any]](taskBytes, Thread.currentThread.getContextClassLoader)
-        task.localProperties = taskProps
+        task = taskDesc.task(ser).asInstanceOf[Task[Any]]
         task.setTaskMemoryManager(taskMemoryManager)
 
         // If this task has been killed before we deserialized it, let's quit now. Otherwise,
@@ -637,7 +632,7 @@ private[spark] class Executor(
    * Download any missing dependencies if we receive a new set of files and JARs from the
    * SparkContext. Also adds any new JARs we fetched to the class loader.
    */
-  private def updateDependencies(newFiles: HashMap[String, Long], newJars: HashMap[String, Long]) {
+  private def updateDependencies(newFiles: Map[String, Long], newJars: Map[String, Long]) {
     lazy val hadoopConf = SparkHadoopUtil.get.newConfiguration(conf)
     synchronized {
       // Fetch missing dependencies
@@ -680,7 +675,7 @@ private[spark] class Executor(
       if (taskRunner.task != null) {
         taskRunner.task.metrics.mergeShuffleReadMetrics()
         taskRunner.task.metrics.setJvmGCTime(curGCTime - taskRunner.startGCTime)
-        accumUpdates += ((taskRunner.taskId, taskRunner.task.metrics.accumulators()))
+        accumUpdates += ((taskRunner.taskDesc.taskId, taskRunner.task.metrics.accumulators()))
       }
     }
 

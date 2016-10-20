@@ -18,9 +18,7 @@
 package org.apache.spark.scheduler.cluster.mesos
 
 import java.nio.ByteBuffer
-import java.util.Arrays
-import java.util.Collection
-import java.util.Collections
+import java.util.{Arrays, Collection, Collections, Properties}
 
 import scala.collection.JavaConverters._
 import scala.collection.mutable
@@ -34,11 +32,11 @@ import org.mockito.Matchers._
 import org.mockito.Mockito._
 import org.scalatest.mock.MockitoSugar
 
-import org.apache.spark.{LocalSparkContext, SparkConf, SparkContext, SparkFunSuite}
-import org.apache.spark.executor.MesosExecutorBackend
-import org.apache.spark.scheduler.{LiveListenerBus, SparkListenerExecutorAdded,
-  TaskDescription, TaskSchedulerImpl, WorkerOffer}
+import org.apache.spark.{LocalSparkContext, SparkConf, SparkContext, SparkEnv, SparkFunSuite, TaskContext}
+import org.apache.spark.executor.{MesosExecutorBackend, TaskMetrics}
+import org.apache.spark.scheduler.{LiveListenerBus, SparkListenerExecutorAdded, TaskDescription, TaskSchedulerImpl, WorkerOffer}
 import org.apache.spark.scheduler.cluster.ExecutorInfo
+import org.apache.spark.serializer.JavaSerializer
 
 class MesosFineGrainedSchedulerBackendSuite
   extends SparkFunSuite with LocalSparkContext with MockitoSugar {
@@ -48,10 +46,13 @@ class MesosFineGrainedSchedulerBackendSuite
     conf.set("spark.mesos.driver.webui.url", "http://webui")
     conf.set("spark.app.name", "name1")
 
+    val env = mock[SparkEnv]
+    when(env.closureSerializer).thenReturn(new JavaSerializer(conf))
     val sc = mock[SparkContext]
     when(sc.conf).thenReturn(conf)
     when(sc.sparkUser).thenReturn("sparkUser1")
     when(sc.appName).thenReturn("appName1")
+    when(sc.env).thenReturn(env)
 
     val taskScheduler = mock[TaskSchedulerImpl]
     val driver = mock[SchedulerDriver]
@@ -87,6 +88,9 @@ class MesosFineGrainedSchedulerBackendSuite
     listenerBus.post(
       SparkListenerExecutorAdded(anyLong, "s1", new ExecutorInfo("host1", 2, Map.empty)))
 
+    val env = mock[SparkEnv]
+    when(env.closureSerializer).thenReturn(new JavaSerializer(conf))
+
     val sc = mock[SparkContext]
     when(sc.getSparkHome()).thenReturn(Option("/spark-home"))
 
@@ -94,6 +98,7 @@ class MesosFineGrainedSchedulerBackendSuite
     when(sc.executorEnvs).thenReturn(new mutable.HashMap[String, String])
     when(sc.executorMemory).thenReturn(100)
     when(sc.listenerBus).thenReturn(listenerBus)
+    when(sc.env).thenReturn(env)
     val taskScheduler = mock[TaskSchedulerImpl]
     when(taskScheduler.CPUS_PER_TASK).thenReturn(2)
 
@@ -118,6 +123,9 @@ class MesosFineGrainedSchedulerBackendSuite
     listenerBus.post(
       SparkListenerExecutorAdded(anyLong, "s1", new ExecutorInfo("host1", 2, Map.empty)))
 
+    val env = mock[SparkEnv]
+    when(env.closureSerializer).thenReturn(new JavaSerializer(conf))
+
     val sc = mock[SparkContext]
     when(sc.getSparkHome()).thenReturn(Option("/spark-home"))
 
@@ -125,6 +133,7 @@ class MesosFineGrainedSchedulerBackendSuite
     when(sc.executorEnvs).thenReturn(new mutable.HashMap[String, String])
     when(sc.executorMemory).thenReturn(100)
     when(sc.listenerBus).thenReturn(listenerBus)
+    when(sc.env).thenReturn(env)
     val taskScheduler = mock[TaskSchedulerImpl]
     when(taskScheduler.CPUS_PER_TASK).thenReturn(2)
 
@@ -158,12 +167,15 @@ class MesosFineGrainedSchedulerBackendSuite
     listenerBus.post(
       SparkListenerExecutorAdded(anyLong, "s1", new ExecutorInfo("host1", 2, Map.empty)))
 
+    val env = mock[SparkEnv]
+    when(env.closureSerializer).thenReturn(new JavaSerializer(conf))
     val sc = mock[SparkContext]
     when(sc.executorMemory).thenReturn(100)
     when(sc.getSparkHome()).thenReturn(Option("/spark-home"))
     when(sc.executorEnvs).thenReturn(new mutable.HashMap[String, String])
     when(sc.conf).thenReturn(conf)
     when(sc.listenerBus).thenReturn(listenerBus)
+    when(sc.env).thenReturn(env)
 
     val backend = new MesosFineGrainedSchedulerBackend(taskScheduler, sc, "master")
 
@@ -218,12 +230,15 @@ class MesosFineGrainedSchedulerBackendSuite
     listenerBus.post(
       SparkListenerExecutorAdded(anyLong, "s1", new ExecutorInfo("host1", 2, Map.empty)))
 
+    val env = mock[SparkEnv]
+    when(env.closureSerializer).thenReturn(new JavaSerializer(new SparkConf()))
     val sc = mock[SparkContext]
     when(sc.executorMemory).thenReturn(100)
     when(sc.getSparkHome()).thenReturn(Option("/path"))
     when(sc.executorEnvs).thenReturn(new mutable.HashMap[String, String])
     when(sc.conf).thenReturn(new SparkConf)
     when(sc.listenerBus).thenReturn(listenerBus)
+    when(sc.env).thenReturn(env)
 
     val backend = new MesosFineGrainedSchedulerBackend(taskScheduler, sc, "master")
 
@@ -246,7 +261,18 @@ class MesosFineGrainedSchedulerBackendSuite
       mesosOffers.get(2).getHostname,
       (minCpu - backend.mesosExecutorCores).toInt
     )
-    val taskDesc = new TaskDescription(1L, 0, "s1", "n1", 0, ByteBuffer.wrap(new Array[Byte](0)))
+
+    val taskMetrics = TaskMetrics.empty
+    val taskContextImpl = mock[org.apache.spark.TaskContextImpl]
+    val task = new org.apache.spark.scheduler.Task[Int](0, 0, 0) {
+      context = taskContextImpl
+      taskMetrics.incMemoryBytesSpilled(10)
+      override def runTask(tc: TaskContext): Int = 0
+    }
+    val taskDesc = new TaskDescription(1L, 0, "s1", "n1", 0,
+      new mutable.HashMap[String, Long](),
+      new mutable.HashMap[String, Long](),
+      task)
     when(taskScheduler.resourceOffers(expectedWorkerOffers)).thenReturn(Seq(Seq(taskDesc)))
     when(taskScheduler.CPUS_PER_TASK).thenReturn(2)
 
@@ -299,12 +325,15 @@ class MesosFineGrainedSchedulerBackendSuite
     listenerBus.post(
       SparkListenerExecutorAdded(anyLong, "s1", new ExecutorInfo("host1", 2, Map.empty)))
 
+    val env = mock[SparkEnv]
+    when(env.closureSerializer).thenReturn(new JavaSerializer(new SparkConf))
     val sc = mock[SparkContext]
     when(sc.executorMemory).thenReturn(100)
     when(sc.getSparkHome()).thenReturn(Option("/path"))
     when(sc.executorEnvs).thenReturn(new mutable.HashMap[String, String])
     when(sc.conf).thenReturn(new SparkConf)
     when(sc.listenerBus).thenReturn(listenerBus)
+    when(sc.env).thenReturn(env)
 
     val id = 1
     val builder = Offer.newBuilder()
@@ -345,7 +374,17 @@ class MesosFineGrainedSchedulerBackendSuite
       2 // Deducting 1 for executor
     )
 
-    val taskDesc = new TaskDescription(1L, 0, "s1", "n1", 0, ByteBuffer.wrap(new Array[Byte](0)))
+    val taskMetrics = TaskMetrics.empty
+    val taskContextImpl = mock[org.apache.spark.TaskContextImpl]
+    val task = new org.apache.spark.scheduler.Task[Int](0, 0, 0) {
+      context = taskContextImpl
+      taskMetrics.incMemoryBytesSpilled(10)
+      override def runTask(tc: TaskContext): Int = 0
+    }
+    val taskDesc = new TaskDescription(1L, 0, "s1", "n1", 0,
+      new mutable.HashMap[String, Long](),
+      new mutable.HashMap[String, Long](),
+      task)
     when(taskScheduler.resourceOffers(expectedWorkerOffers)).thenReturn(Seq(Seq(taskDesc)))
     when(taskScheduler.CPUS_PER_TASK).thenReturn(1)
 
