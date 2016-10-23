@@ -17,6 +17,10 @@
 
 package org.apache.spark.scheduler.cluster
 
+import java.util.concurrent.atomic.AtomicIntegerFieldUpdater
+
+import io.netty.util.internal.PlatformDependent
+
 import org.apache.spark.rpc.{RpcAddress, RpcEndpointRef}
 
 /**
@@ -29,10 +33,33 @@ import org.apache.spark.rpc.{RpcAddress, RpcEndpointRef}
  * @param totalCores The total number of cores available to the executor
  */
 private[cluster] class ExecutorData(
-   val executorEndpoint: RpcEndpointRef,
-   val executorAddress: RpcAddress,
-   override val executorHost: String,
-   var freeCores: Int,
-   override val totalCores: Int,
-   override val logUrlMap: Map[String, String]
-) extends ExecutorInfo(executorHost, totalCores, logUrlMap)
+  val executorEndpoint: RpcEndpointRef,
+  val executorAddress: RpcAddress,
+  override val executorHost: String,
+  @volatile var freeCores: Int,
+  override val totalCores: Int,
+  override val logUrlMap: Map[String, String]
+) extends ExecutorInfo(executorHost, totalCores, logUrlMap) {
+  def incrementFreeCores(increment: Int): Unit = {
+    var break = false
+    while (break) {
+      val preCores: Int = freeCores
+      val nextCores: Int = preCores + increment
+      if (ExecutorData.refCntUpdater.compareAndSet(this, preCores, nextCores)) {
+        break = true
+      }
+    }
+  }
+
+  def decrementFreeCores(increment: Int): Unit = {
+    incrementFreeCores(-increment)
+  }
+}
+
+private[this] object ExecutorData {
+  var refCntUpdater: AtomicIntegerFieldUpdater[ExecutorData] = null
+  refCntUpdater = PlatformDependent.newAtomicIntegerFieldUpdater(classOf[ExecutorData], "freeCores")
+  if (refCntUpdater == null) {
+    refCntUpdater = AtomicIntegerFieldUpdater.newUpdater(classOf[ExecutorData], "freeCores")
+  }
+}

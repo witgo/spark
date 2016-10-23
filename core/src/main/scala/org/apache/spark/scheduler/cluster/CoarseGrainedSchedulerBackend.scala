@@ -32,6 +32,8 @@ import org.apache.spark.rpc._
 import org.apache.spark.scheduler._
 import org.apache.spark.scheduler.cluster.CoarseGrainedClusterMessages._
 import org.apache.spark.scheduler.cluster.CoarseGrainedSchedulerBackend.ENDPOINT_NAME
+import org.apache.spark.scheduler.cluster.CoarseGrainedSchedulerBackend.SERIALIZE_TASK_ENDPOINT_NAME
+import org.apache.spark.serializer.SerializerInstance
 import org.apache.spark.util.{RpcUtils, SerializableBuffer, ThreadUtils, Utils}
 
 /**
@@ -93,16 +95,64 @@ class CoarseGrainedSchedulerBackend(scheduler: TaskSchedulerImpl, val rpcEnv: Rp
   // The num of current max ExecutorId used to re-register appMaster
   @volatile protected var currentExecutorIdCounter = 0
 
+  class SerializeTaskEndpoint(override val rpcEnv: RpcEnv) extends RpcEndpoint with Logging {
+    private val ser = new ThreadLocal[SerializerInstance] {
+      override def initialValue(): SerializerInstance = {
+        SparkEnv.get.closureSerializer.newInstance()
+      }
+    }
+
+    override def receive: PartialFunction[Any, Unit] = {
+      case SerializeTask(task: TaskDescription) =>
+        serializeTask(task)
+    }
+
+    override def receiveAndReply(context: RpcCallContext): PartialFunction[Any, Unit] = {
+      case StopDriver =>
+        context.reply(true)
+        stop()
+    }
+
+    private def serializeTask(task: TaskDescription): Unit = {
+      var launched = false
+      try {
+        val serializedTask = task.encode(ser.get())
+        if (serializedTask.limit >= maxRpcMessageSize) {
+          scheduler.taskIdToTaskSetManager.get(task.taskId).foreach { taskSetMgr =>
+            var msg = "Serialized task %s:%d was %d bytes, which exceeds max allowed: " +
+              "spark.rpc.message.maxSize (%d bytes). Consider increasing " +
+              "spark.rpc.message.maxSize or using broadcast variables for large values."
+            msg = msg.format(task.taskId, task.index, serializedTask.limit, maxRpcMessageSize)
+            taskSetMgr.abort(msg)
+          }
+        } else {
+          val executorData = executorDataMap(task.executorId)
+          logDebug(s"Launching task ${task.taskId} on executor id: ${task.executorId} " +
+            s" hostname: ${executorData.executorHost}.")
+          executorData.executorEndpoint.send(LaunchTask(new SerializableBuffer(serializedTask)))
+          launched = true
+        }
+      } catch {
+        case NonFatal(e) =>
+          scheduler.taskIdToTaskSetManager.get(task.taskId).foreach { taskSetMgr =>
+            taskSetMgr.abort(
+              s"Failed to serialize task ${task.taskId}, not attempting to retry it.",
+              Some(e))
+          }
+      } finally {
+        if (!launched) {
+          val executorData = executorDataMap(task.executorId)
+          executorData.incrementFreeCores(scheduler.CPUS_PER_TASK)
+        }
+      }
+    }
+  }
+
   class DriverEndpoint(override val rpcEnv: RpcEnv, sparkProperties: Seq[(String, String)])
     extends ThreadSafeRpcEndpoint with Logging {
 
     // Executors that have been lost, but for which we don't yet know the real exit reason.
     protected val executorsPendingLossReason = new HashSet[String]
-
-    // If this DriverEndpoint is changed to support multiple threads,
-    // then this may need to be changed so that we don't share the serializer
-    // instance across threads
-    private val ser = SparkEnv.get.closureSerializer.newInstance()
 
     protected val addressToExecutorId = new HashMap[RpcAddress, String]
 
@@ -126,7 +176,7 @@ class CoarseGrainedSchedulerBackend(scheduler: TaskSchedulerImpl, val rpcEnv: Rp
         if (TaskState.isFinished(state)) {
           executorDataMap.get(executorId) match {
             case Some(executorInfo) =>
-              executorInfo.freeCores += scheduler.CPUS_PER_TASK
+              executorInfo.incrementFreeCores(scheduler.CPUS_PER_TASK)
               makeOffers(executorId)
             case None =>
               // Ignoring the update since we don't know about the executor.
@@ -248,37 +298,9 @@ class CoarseGrainedSchedulerBackend(scheduler: TaskSchedulerImpl, val rpcEnv: Rp
     // Launch tasks returned by a set of resource offers
     private def launchTasks(tasks: Seq[Seq[TaskDescription]]) {
       for (task <- tasks.flatten) {
-        try {
-          val serializedTask = task.encode(ser)
-          if (serializedTask.limit >= maxRpcMessageSize) {
-            scheduler.taskIdToTaskSetManager.get(task.taskId).foreach { taskSetMgr =>
-              try {
-                var msg = "Serialized task %s:%d was %d bytes, which exceeds max allowed: " +
-                  "spark.rpc.message.maxSize (%d bytes). Consider increasing " +
-                  "spark.rpc.message.maxSize or using broadcast variables for large values."
-                msg = msg.format(task.taskId, task.index, serializedTask.limit, maxRpcMessageSize)
-                taskSetMgr.abort(msg)
-              } catch {
-                case e: Exception => logError("Exception in error callback", e)
-              }
-            }
-          } else {
-            val executorData = executorDataMap(task.executorId)
-            executorData.freeCores -= scheduler.CPUS_PER_TASK
-
-            logDebug(s"Launching task ${task.taskId} on executor id: ${task.executorId} " +
-              s" hostname: ${executorData.executorHost}.")
-
-            executorData.executorEndpoint.send(LaunchTask(new SerializableBuffer(serializedTask)))
-          }
-        } catch {
-          case NonFatal(e) =>
-            scheduler.taskIdToTaskSetManager.get(task.taskId).foreach { taskSetMgr =>
-              taskSetMgr.abort(
-                s"Failed to serialize task ${task.taskId}, not attempting to retry it.",
-                Some(e))
-            }
-        }
+        val executorData = executorDataMap(task.executorId)
+        executorData.decrementFreeCores(scheduler.CPUS_PER_TASK)
+        serializeTaskEndpoint.send(SerializeTask(task))
       }
     }
 
@@ -343,6 +365,7 @@ class CoarseGrainedSchedulerBackend(scheduler: TaskSchedulerImpl, val rpcEnv: Rp
   }
 
   var driverEndpoint: RpcEndpointRef = null
+  var serializeTaskEndpoint: RpcEndpointRef = null
 
   protected def minRegisteredRatio: Double = _minRegisteredRatio
 
@@ -356,6 +379,11 @@ class CoarseGrainedSchedulerBackend(scheduler: TaskSchedulerImpl, val rpcEnv: Rp
 
     // TODO (prashant) send conf instead of properties
     driverEndpoint = createDriverEndpointRef(properties)
+    serializeTaskEndpoint = createSerializeTaskEndpointRef()
+  }
+
+  protected def createSerializeTaskEndpointRef(): RpcEndpointRef = {
+    rpcEnv.setupEndpoint(SERIALIZE_TASK_ENDPOINT_NAME, new SerializeTaskEndpoint(rpcEnv))
   }
 
   protected def createDriverEndpointRef(
@@ -384,6 +412,9 @@ class CoarseGrainedSchedulerBackend(scheduler: TaskSchedulerImpl, val rpcEnv: Rp
     try {
       if (driverEndpoint != null) {
         driverEndpoint.askWithRetry[Boolean](StopDriver)
+      }
+      if (serializeTaskEndpoint != null) {
+        serializeTaskEndpoint.askWithRetry[Boolean](StopDriver)
       }
     } catch {
       case e: Exception =>
@@ -616,4 +647,5 @@ class CoarseGrainedSchedulerBackend(scheduler: TaskSchedulerImpl, val rpcEnv: Rp
 
 private[spark] object CoarseGrainedSchedulerBackend {
   val ENDPOINT_NAME = "CoarseGrainedScheduler"
+  val SERIALIZE_TASK_ENDPOINT_NAME = "SerializeTaskCoarseGrainedScheduler"
 }
