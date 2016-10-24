@@ -264,8 +264,9 @@ class CoarseGrainedSchedulerBackend(scheduler: TaskSchedulerImpl, val rpcEnv: Rp
     // Make fake resource offers on all executors
     private def makeOffers() {
       // Filter out executors under killing
-      val activeExecutors = executorDataMap.filterKeys(executorIsAlive)
-      val workOffers = activeExecutors.map { case (id, executorData) =>
+      val workOffers = executorDataMap.view.filter { case (id, executorData) =>
+        executorIsAlive(id) && executorData.freeCores > 0
+      }.map { case (id, executorData) =>
         new WorkerOffer(id, executorData.executorHost, executorData.freeCores)
       }.toIndexedSeq
       launchTasks(scheduler.resourceOffers(workOffers))

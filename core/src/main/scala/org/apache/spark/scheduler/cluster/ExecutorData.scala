@@ -38,10 +38,10 @@ private[cluster] class ExecutorData(
   override val totalCores: Int,
   override val logUrlMap: Map[String, String]
 ) extends ExecutorInfo(executorHost, totalCores, logUrlMap) {
-  val freeCoresUpdater = new LongAdderV8()
+  private val freeCoresUpdater = new LongAdderV8()
   freeCoresUpdater.add(freeCores_)
 
-  def freeCores(): Int = freeCoresUpdater.intValue()
+  def freeCores: Int = freeCoresUpdater.intValue()
 
   def incrementFreeCores(increment: Int): Unit = {
     freeCoresUpdater.add(increment)
