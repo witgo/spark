@@ -326,6 +326,33 @@ private[spark] class BlockManager(
     doPutData(blockId, data, level, classTag)
   }
 
+  @throws(classOf[Throwable])
+  private[spark] def tryFetchRemoteBlock(
+    blockId: BlockId,
+    address: BlockManagerId,
+    data: ManagedBuffer = null): ManagedBuffer = {
+    var newBuf: ManagedBuffer = null
+    if (data == null) {
+      newBuf = blockTransferService.fetchBlockSync(address.host,
+        address.port, address.executorId, blockId.toString)
+    } else {
+      newBuf = data
+    }
+    val tellMaster = false
+    val classTag = scala.reflect.classTag[Any]
+    val level = StorageLevel.MEMORY_AND_DISK_SER
+    val tmpBlockId = new TempLocalBlockId(java.util.UUID.randomUUID())
+    doPutData(tmpBlockId, newBuf, level, classTag, tellMaster)
+    blockInfoManager.get(tmpBlockId).map { info =>
+      doGetLocalData(tmpBlockId, info)
+    } match {
+      case Some(buffer) =>
+        new ReleasableManagedBuffer(buffer, () => removeBlock(tmpBlockId, tellMaster))
+      case None =>
+        throw new BlockNotFoundException(blockId.toString)
+    }
+  }
+
   /**
    * Get the BlockStatus for the block identified by the given ID, if it exists.
    * NOTE: This is mainly for testing.

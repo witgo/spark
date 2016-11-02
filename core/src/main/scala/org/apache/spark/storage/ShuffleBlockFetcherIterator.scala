@@ -332,8 +332,26 @@ final class ShuffleBlockFetcherIterator(
         throwFetchFailedException(blockId, address, e)
 
       case SuccessFetchResult(blockId, address, _, buf, _) =>
+        import org.apache.spark.network.protocol.ChunkFetchSuccess.MAX_FRAME_SIZE
+        var newBuf: ManagedBuffer = buf
+        if (newBuf.size() > MAX_FRAME_SIZE) {
+          var totalFailureCount = 0
+          var done = false
+          while (!done) {
+            try {
+              newBuf = blockManager.tryFetchRemoteBlock(blockId, address, newBuf)
+              done = true
+            } catch {
+              case NonFatal(t) =>
+                if (totalFailureCount > 3) throwFetchFailedException(blockId, address, t)
+                totalFailureCount += 1
+                newBuf = null
+            }
+          }
+        }
+
         try {
-          (result.blockId, new BufferReleasingInputStream(buf.createInputStream(), this))
+          (result.blockId, new BufferReleasingInputStream(newBuf.createInputStream(), this))
         } catch {
           case NonFatal(t) =>
             throwFetchFailedException(blockId, address, t)
