@@ -339,6 +339,9 @@ final class ShuffleBlockFetcherIterator(
           var done = false
           while (!done) {
             try {
+              if (totalFailureCount > 0) {
+                logInfo(s"Retrying fetch ($totalFailureCount/3) for block $blockId")
+              }
               newBuf = blockManager.tryFetchRemoteBlock(blockId, address, newBuf)
               done = true
             } catch {
