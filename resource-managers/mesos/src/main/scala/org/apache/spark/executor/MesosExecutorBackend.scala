@@ -25,13 +25,12 @@ import org.apache.mesos.{Executor => MesosExecutor, ExecutorDriver, MesosExecuto
 import org.apache.mesos.Protos.{TaskStatus => MesosTaskStatus, _}
 import org.apache.mesos.protobuf.ByteString
 
-import org.apache.spark.{SparkConf, SparkEnv}
+import org.apache.spark.{SparkConf, SparkEnv, TaskState}
 import org.apache.spark.TaskState
 import org.apache.spark.deploy.SparkHadoopUtil
 import org.apache.spark.internal.Logging
 import org.apache.spark.scheduler.TaskDescription
 import org.apache.spark.scheduler.cluster.mesos.{MesosSchedulerUtils, MesosTaskLaunchData}
-import org.apache.spark.serializer.SerializerInstance
 import org.apache.spark.util.Utils
 
 private[spark] class MesosExecutorBackend
@@ -87,7 +86,7 @@ private[spark] class MesosExecutorBackend
 
   override def launchTask(d: ExecutorDriver, taskInfo: TaskInfo) {
     val taskData = MesosTaskLaunchData.fromByteString(taskInfo.getData)
-    val taskDesc = TaskDescription.decode(taskData.serializedTask)
+    val taskDesc = TaskDescription(taskData.serializedTask)
     if (executor == null) {
       logError("Received launchTask but executor was null")
     } else {

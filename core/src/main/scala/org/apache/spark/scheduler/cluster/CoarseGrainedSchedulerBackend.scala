@@ -254,31 +254,24 @@ class CoarseGrainedSchedulerBackend(scheduler: TaskSchedulerImpl, val rpcEnv: Rp
           val serializedTask = task.encode(ser)
           if (serializedTask.limit >= maxRpcMessageSize) {
             scheduler.taskIdToTaskSetManager.get(task.taskId).foreach { taskSetMgr =>
-              try {
-                var msg = "Serialized task %s:%d was %d bytes, which exceeds max allowed: " +
-                  "spark.rpc.message.maxSize (%d bytes). Consider increasing " +
-                  "spark.rpc.message.maxSize or using broadcast variables for large values."
-                msg = msg.format(task.taskId, task.index, serializedTask.limit, maxRpcMessageSize)
-                taskSetMgr.abort(msg)
-              } catch {
-                case e: Exception => logError("Exception in error callback", e)
-              }
+              var msg = "Serialized task %s:%d was %d bytes, which exceeds max allowed: " +
+                "spark.rpc.message.maxSize (%d bytes). Consider increasing " +
+                "spark.rpc.message.maxSize or using broadcast variables for large values."
+              msg = msg.format(task.taskId, task.index, serializedTask.limit, maxRpcMessageSize)
+              taskSetMgr.abort(msg)
             }
           } else {
             val executorData = executorDataMap(task.executorId)
             executorData.freeCores -= scheduler.CPUS_PER_TASK
-
             logDebug(s"Launching task ${task.taskId} on executor id: ${task.executorId} " +
               s" hostname: ${executorData.executorHost}.")
-
             executorData.executorEndpoint.send(LaunchTask(new SerializableBuffer(serializedTask)))
           }
         } catch {
           case NonFatal(e) =>
             scheduler.taskIdToTaskSetManager.get(task.taskId).foreach { taskSetMgr =>
-              taskSetMgr.abort(
-                s"Failed to serialize task ${task.taskId}, not attempting to retry it.",
-                Some(e))
+              val message = s"Failed to serialize task ${task.taskId}, not attempting to retry it."
+              taskSetMgr.abort(message, Some(e))
             }
         }
       }

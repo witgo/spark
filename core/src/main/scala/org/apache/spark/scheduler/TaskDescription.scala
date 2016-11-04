@@ -138,6 +138,11 @@ private[spark] class TaskDescription private(
 private[spark] object TaskDescription {
 
   @throws[IOException]
+  def apply(byteBuffer: ByteBuffer): TaskDescription = {
+    decode(byteBuffer)
+  }
+
+  @throws[IOException]
   def decode(byteBuffer: ByteBuffer): TaskDescription = {
     decode(new ByteBufferInputStream(byteBuffer))
   }

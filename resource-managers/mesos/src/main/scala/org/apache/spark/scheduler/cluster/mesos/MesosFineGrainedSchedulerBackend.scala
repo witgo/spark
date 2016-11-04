@@ -300,15 +300,13 @@ private[spark] class MesosFineGrainedSchedulerBackend(
 
       val slavesIdsOfAcceptedOffers = HashSet[String]()
 
-      var curTask: TaskDescription = null
-
       // Call into the TaskSchedulerImpl
       val acceptedOffers = scheduler.resourceOffers(workerOffers).filter(!_.isEmpty)
-      try {
-        acceptedOffers
-          .foreach { offer =>
-            offer.foreach { taskDesc =>
-              curTask = taskDesc
+
+      acceptedOffers
+        .foreach { offer =>
+          offer.foreach { taskDesc =>
+            try {
               val slaveId = taskDesc.executorId
               slavesIdsOfAcceptedOffers += slaveId
               taskIdToSlaveId(taskDesc.taskId) = slaveId
@@ -319,16 +317,17 @@ private[spark] class MesosFineGrainedSchedulerBackend(
               mesosTasks.getOrElseUpdate(slaveId, new JArrayList[MesosTaskInfo])
                 .add(mesosTask)
               slaveIdToResources(slaveId) = remainingResources
+            } catch {
+              case NonFatal(e) =>
+                scheduler.taskIdToTaskSetManager.get(taskDesc.taskId).foreach { taskSetMgr =>
+                  taskSetMgr.abort(
+                    s"Failed to serialize task ${taskDesc.taskId}, not attempting to retry it.",
+                    Some(e))
+                }
             }
           }
-      } catch {
-        case NonFatal(e) =>
-          scheduler.taskIdToTaskSetManager.get(curTask.taskId).foreach { taskSetMgr =>
-            taskSetMgr.abort(
-              s"Failed to serialize task ${curTask.taskId}, not attempting to retry it.",
-              Some(e))
-          }
-      }
+        }
+
 
       // Reply to the offers
       val filters = Filters.newBuilder().setRefuseSeconds(1).build() // TODO: lower timeout?

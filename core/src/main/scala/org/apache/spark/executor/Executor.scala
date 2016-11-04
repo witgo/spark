@@ -34,7 +34,7 @@ import org.apache.spark.deploy.SparkHadoopUtil
 import org.apache.spark.internal.Logging
 import org.apache.spark.memory.TaskMemoryManager
 import org.apache.spark.rpc.RpcTimeout
-import org.apache.spark.scheduler._
+import org.apache.spark.scheduler.{DirectTaskResult, IndirectTaskResult, Task, TaskDescription}
 import org.apache.spark.shuffle.FetchFailedException
 import org.apache.spark.storage.{StorageLevel, TaskResultBlockId}
 import org.apache.spark.util._
@@ -50,7 +50,7 @@ import org.apache.spark.util.io.ChunkedByteBuffer
 private[spark] class Executor(
     executorId: String,
     executorHostname: String,
-    val env: SparkEnv,
+    env: SparkEnv,
     userClassPath: Seq[URL] = Nil,
     isLocal: Boolean = false)
   extends Logging {

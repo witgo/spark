@@ -64,7 +64,7 @@ private[spark] class LocalEndpoint(
 
   private val serializer = new ThreadLocal[SerializerInstance] {
     override def initialValue(): SerializerInstance = {
-      executor.env.closureSerializer.newInstance()
+      SparkEnv.get.closureSerializer.newInstance()
     }
   }
 
