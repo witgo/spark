@@ -269,10 +269,15 @@ class MesosFineGrainedSchedulerBackendSuite
       taskMetrics.incMemoryBytesSpilled(10)
       override def runTask(tc: TaskContext): Int = 0
     }
-    val taskDesc = new TaskDescription(1L, 0, "s1", "n1", 0,
-      new mutable.HashMap[String, Long](),
-      new mutable.HashMap[String, Long](),
-      task)
+    val taskDesc = new TaskDescription(
+        taskId = 1L,
+        attemptNumber = 0,
+        executorId = "s1",
+        name = "n1",
+        index = 0,
+        taskFiles = new mutable.HashMap[String, Long](),
+        taskJars = new mutable.HashMap[String, Long](),
+        task = task)
     when(taskScheduler.resourceOffers(expectedWorkerOffers)).thenReturn(Seq(Seq(taskDesc)))
     when(taskScheduler.CPUS_PER_TASK).thenReturn(2)
 
@@ -381,10 +386,15 @@ class MesosFineGrainedSchedulerBackendSuite
       taskMetrics.incMemoryBytesSpilled(10)
       override def runTask(tc: TaskContext): Int = 0
     }
-    val taskDesc = new TaskDescription(1L, 0, "s1", "n1", 0,
-      new mutable.HashMap[String, Long](),
-      new mutable.HashMap[String, Long](),
-      task)
+    val taskDesc = new TaskDescription(
+      taskId = 1L,
+      attemptNumber = 0,
+      executorId = "s1",
+      name = "n1",
+      index = 0,
+      taskFiles = new mutable.HashMap[String, Long](),
+      taskJars = new mutable.HashMap[String, Long](),
+      task = task)
     when(taskScheduler.resourceOffers(expectedWorkerOffers)).thenReturn(Seq(Seq(taskDesc)))
     when(taskScheduler.CPUS_PER_TASK).thenReturn(1)
 

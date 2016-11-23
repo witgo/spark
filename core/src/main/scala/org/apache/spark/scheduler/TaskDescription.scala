@@ -32,25 +32,26 @@ import org.apache.spark.util.{ByteBufferInputStream, ByteBufferOutputStream}
  * `TaskSetManager.resourceOffer`.
  */
 private[spark] class TaskDescription private(
-  val taskId: Long,
-  val attemptNumber: Int,
-  val executorId: String,
-  val name: String,
-  val index: Int,
-  val taskFiles: mutable.Map[String, Long],
-  val taskJars: mutable.Map[String, Long],
+    val taskId: Long,
+    val attemptNumber: Int,
+    val executorId: String,
+    val name: String,
+    val index: Int,
+    val taskFiles: mutable.Map[String, Long],
+    val taskJars: mutable.Map[String, Long],
   private var task_ : Task[_],
   private var taskBytes: InputStream,
   private var taskProps: Properties) {
 
-  def this(taskId: Long,
-    attemptNumber: Int,
-    executorId: String,
-    name: String,
-    index: Int,
-    taskFiles: mutable.Map[String, Long],
-    taskJars: mutable.Map[String, Long],
-    task: Task[_]) {
+  def this(
+      taskId: Long,
+      attemptNumber: Int,
+      executorId: String,
+      name: String,
+      index: Int,
+      taskFiles: mutable.Map[String, Long],
+      taskJars: mutable.Map[String, Long],
+      task: Task[_]) {
     this(taskId, attemptNumber, executorId, name, index, taskFiles, taskJars, task,
       null.asInstanceOf[InputStream],
       null.asInstanceOf[Properties])
