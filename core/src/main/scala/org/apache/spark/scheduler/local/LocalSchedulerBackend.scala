@@ -30,8 +30,8 @@ import org.apache.spark.internal.Logging
 import org.apache.spark.launcher.{LauncherBackend, SparkAppHandle}
 import org.apache.spark.rpc.{RpcCallContext, RpcEndpointRef, RpcEnv, ThreadSafeRpcEndpoint}
 import org.apache.spark.scheduler._
+import org.apache.spark.scheduler.cluster.CoarseGrainedSchedulerBackend.abortTaskSetManager
 import org.apache.spark.scheduler.cluster.ExecutorInfo
-import org.apache.spark.serializer.SerializerInstance
 
 private case class ReviveOffers()
 
@@ -62,11 +62,10 @@ private[spark] class LocalEndpoint(
   private val executor = new Executor(
     localExecutorId, localExecutorHostname, SparkEnv.get, userClassPath, isLocal = true)
 
-  private val serializer = new ThreadLocal[SerializerInstance] {
-    override def initialValue(): SerializerInstance = {
-      SparkEnv.get.closureSerializer.newInstance()
-    }
-  }
+  // If this LocalEndpoint is changed to support multiple threads,
+  // then this may need to be changed so that we don't share the serializer
+  // instance across threads
+  private val serializer = SparkEnv.get.closureSerializer.newInstance()
 
   override def receive: PartialFunction[Any, Unit] = {
     case ReviveOffers =>
@@ -93,16 +92,14 @@ private[spark] class LocalEndpoint(
     val offers = IndexedSeq(new WorkerOffer(localExecutorId, localExecutorHostname, freeCores))
     for (task <- scheduler.resourceOffers(offers).flatten) {
       try {
-        val taskSer = task.encode(serializer.get)
+        val taskSer = task.encode(serializer)
         freeCores -= scheduler.CPUS_PER_TASK
         executor.launchTask(executorBackend, TaskDescription.decode(taskSer))
       } catch {
         case NonFatal(e) =>
-          scheduler.taskIdToTaskSetManager.get(task.taskId).foreach { taskSetMgr =>
-            taskSetMgr.abort(
-              s"Failed to serialize task ${task.taskId}, not attempting to retry it.",
-              Some(e))
-          }
+          val taskId = task.taskId
+          val msg = s"Failed to serialize task $taskId, not attempting to retry it."
+          abortTaskSetManager(scheduler, taskId, msg, Some(e))
       }
     }
   }

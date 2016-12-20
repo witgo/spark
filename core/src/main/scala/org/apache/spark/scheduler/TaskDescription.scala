@@ -24,8 +24,8 @@ import java.util.Properties
 import scala.collection.JavaConverters._
 import scala.collection.mutable
 
-import org.apache.spark.serializer.SerializerInstance
-import org.apache.spark.util.{ByteBufferInputStream, ByteBufferOutputStream}
+import org.apache.spark.serializer.{JavaSerializerInstance, SerializerInstance}
+import org.apache.spark.util.{ByteBufferInputStream, ByteBufferOutputStream, Utils}
 
 /**
  * Description of a task that gets passed onto executors to be executed, usually created by
@@ -36,12 +36,12 @@ private[spark] class TaskDescription private(
     val attemptNumber: Int,
     val executorId: String,
     val name: String,
-    val index: Int,
+    val index: Int, // Index within this task's TaskSet
     val taskFiles: mutable.Map[String, Long],
     val taskJars: mutable.Map[String, Long],
-  private var task_ : Task[_],
-  private var taskBytes: InputStream,
-  private var taskProps: Properties) {
+    private var task_ : Task[_],
+    private var taskBytes: InputStream,
+    private var taskProps: Properties) {
 
   def this(
       taskId: Long,
@@ -113,13 +113,20 @@ private[spark] class TaskDescription private(
     serializeStream.flush()
   }
 
-  def task(ser: SerializerInstance): Task[_] = {
+  def task(ser: SerializerInstance, classLoader: ClassLoader): Task[_] = {
     if (task_ == null) {
-      val deserializeStream = ser.deserializeStream(taskBytes)
-      task_ = deserializeStream.readValue[Task[_]]()
-      task_.localProperties = taskProps
-      deserializeStream.close()
-      taskProps = null
+      ser match {
+        case javaSer: JavaSerializerInstance =>
+          val deserializeStream = javaSer.deserializeStream(taskBytes, classLoader)
+          task_ = deserializeStream.readValue[Task[_]]()
+          task_.localProperties = taskProps
+          deserializeStream.close()
+        case _ =>
+          val out = new ByteBufferOutputStream(1024)
+          Utils.copyStream(taskBytes, out, closeStreams = true)
+          task_ = ser.deserialize[Task[_]](out.toByteBuffer, classLoader)
+          task_.localProperties = taskProps
+      }
       taskBytes = null
     }
     task_

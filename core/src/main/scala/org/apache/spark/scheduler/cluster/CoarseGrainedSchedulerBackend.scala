@@ -31,7 +31,7 @@ import org.apache.spark.internal.Logging
 import org.apache.spark.rpc._
 import org.apache.spark.scheduler._
 import org.apache.spark.scheduler.cluster.CoarseGrainedClusterMessages._
-import org.apache.spark.scheduler.cluster.CoarseGrainedSchedulerBackend.ENDPOINT_NAME
+import org.apache.spark.scheduler.cluster.CoarseGrainedSchedulerBackend.{abortTaskSetManager, ENDPOINT_NAME}
 import org.apache.spark.util.{RpcUtils, SerializableBuffer, ThreadUtils, Utils}
 
 /**
@@ -250,30 +250,31 @@ class CoarseGrainedSchedulerBackend(scheduler: TaskSchedulerImpl, val rpcEnv: Rp
     // Launch tasks returned by a set of resource offers
     private def launchTasks(tasks: Seq[Seq[TaskDescription]]) {
       for (task <- tasks.flatten) {
-        try {
-          val serializedTask = task.encode(ser)
-          if (serializedTask.limit >= maxRpcMessageSize) {
-            scheduler.taskIdToTaskSetManager.get(task.taskId).foreach { taskSetMgr =>
-              var msg = "Serialized task %s:%d was %d bytes, which exceeds max allowed: " +
-                "spark.rpc.message.maxSize (%d bytes). Consider increasing " +
-                "spark.rpc.message.maxSize or using broadcast variables for large values."
-              msg = msg.format(task.taskId, task.index, serializedTask.limit, maxRpcMessageSize)
-              taskSetMgr.abort(msg)
-            }
-          } else {
-            val executorData = executorDataMap(task.executorId)
-            executorData.freeCores -= scheduler.CPUS_PER_TASK
-            logDebug(s"Launching task ${task.taskId} on executor id: ${task.executorId} " +
-              s" hostname: ${executorData.executorHost}.")
-            executorData.executorEndpoint.send(LaunchTask(new SerializableBuffer(serializedTask)))
-          }
+        val serializedTask = try {
+          task.encode(ser)
         } catch {
           case NonFatal(e) =>
-            scheduler.taskIdToTaskSetManager.get(task.taskId).foreach { taskSetMgr =>
-              val message = s"Failed to serialize task ${task.taskId}, not attempting to retry it."
-              taskSetMgr.abort(message, Some(e))
-            }
+           abortTaskSetManager(scheduler, task.taskId,
+              s"Failed to serialize task ${task.taskId}, not attempting to retry it.", Some(e))
+             null
         }
+
+        if (serializedTask != null && serializedTask.limit >= maxRpcMessageSize) {
+          val msg = "Serialized task %s:%d was %d bytes, which exceeds max allowed: " +
+            "spark.rpc.message.maxSize (%d bytes). Consider increasing " +
+            "spark.rpc.message.maxSize or using broadcast variables for large values."
+          abortTaskSetManager(scheduler, task.taskId,
+            msg.format(task.taskId, task.index, serializedTask.limit, maxRpcMessageSize))
+        } else if (serializedTask != null) {
+          val executorData = executorDataMap(task.executorId)
+          executorData.freeCores -= scheduler.CPUS_PER_TASK
+
+          logDebug(s"Launching task ${task.taskId} on executor id: ${task.executorId} " +
+            s" hostname: ${executorData.executorHost}.")
+
+          executorData.executorEndpoint.send(LaunchTask(new SerializableBuffer(serializedTask)))
+        }
+
       }
     }
 
@@ -609,6 +610,21 @@ class CoarseGrainedSchedulerBackend(scheduler: TaskSchedulerImpl, val rpcEnv: Rp
     Future.successful(false)
 }
 
-private[spark] object CoarseGrainedSchedulerBackend {
+private[spark] object CoarseGrainedSchedulerBackend extends Logging {
   val ENDPOINT_NAME = "CoarseGrainedScheduler"
+
+  // abort TaskSetManager without exception
+  def abortTaskSetManager(
+    scheduler: TaskSchedulerImpl,
+    taskId: Long,
+    msg: => String,
+    exception: Option[Throwable] = None): Unit = {
+    scheduler.taskIdToTaskSetManager.get(taskId).foreach { taskSetMgr =>
+      try {
+        taskSetMgr.abort(msg, exception)
+      } catch {
+        case e: Exception => logError("Exception in error callback", e)
+      }
+    }
+  }
 }

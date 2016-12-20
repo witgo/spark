@@ -149,8 +149,8 @@ private[spark] class Executor(
   startDriverHeartbeater()
 
   def launchTask(
-    context: ExecutorBackend,
-    taskDesc: TaskDescription): Unit = {
+      context: ExecutorBackend,
+      taskDesc: TaskDescription): Unit = {
     val tr = new TaskRunner(context, taskDesc)
     runningTasks.put(taskDesc.taskId, tr)
     threadPool.execute(tr)
@@ -211,7 +211,14 @@ private[spark] class Executor(
       val taskDesc: TaskDescription)
     extends Runnable {
 
-    val threadName = s"Executor task launch worker for task ${taskDesc.taskId}"
+    val taskId = taskDesc.taskId
+    val attemptNumber = taskDesc.attemptNumber
+    val taskName = taskDesc.name
+    val taskFiles = taskDesc.taskFiles
+    val taskJars = taskDesc.taskJars
+    val taskProps = taskDesc.taskProperties
+
+    val threadName = s"Executor task launch worker for task ${taskId}"
 
     /** Whether this task has been killed. */
     @volatile private var killed = false
@@ -236,7 +243,7 @@ private[spark] class Executor(
     @volatile var task: Task[Any] = _
 
     def kill(interruptThread: Boolean): Unit = {
-      logInfo(s"Executor is trying to kill ${taskDesc.name} (TID ${taskDesc.taskId})")
+      logInfo(s"Executor is trying to kill ${taskName} (TID ${taskId})")
       killed = true
       if (task != null) {
         synchronized {
@@ -265,12 +272,6 @@ private[spark] class Executor(
     override def run(): Unit = {
       threadId = Thread.currentThread.getId
       Thread.currentThread.setName(threadName)
-      val taskId = taskDesc.taskId
-      val attemptNumber = taskDesc.attemptNumber
-      val taskName = taskDesc.name
-      val taskFiles = taskDesc.taskFiles
-      val taskJars = taskDesc.taskJars
-      val taskProps = taskDesc.taskProperties
 
       val threadMXBean = ManagementFactory.getThreadMXBean
       val taskMemoryManager = new TaskMemoryManager(env.memoryManager, taskId)
@@ -291,7 +292,8 @@ private[spark] class Executor(
         // requires access to properties contained within (e.g. for access control).
         Executor.taskDeserializationProps.set(taskProps)
         updateDependencies(taskFiles, taskJars)
-        task = taskDesc.task(ser).asInstanceOf[Task[Any]]
+        task = taskDesc.task(ser, Thread.currentThread.getContextClassLoader)
+          .asInstanceOf[Task[Any]]
         task.setTaskMemoryManager(taskMemoryManager)
 
         // If this task has been killed before we deserialized it, let's quit now. Otherwise,
@@ -675,7 +677,7 @@ private[spark] class Executor(
       if (taskRunner.task != null) {
         taskRunner.task.metrics.mergeShuffleReadMetrics()
         taskRunner.task.metrics.setJvmGCTime(curGCTime - taskRunner.startGCTime)
-        accumUpdates += ((taskRunner.taskDesc.taskId, taskRunner.task.metrics.accumulators()))
+        accumUpdates += ((taskRunner.taskId, taskRunner.task.metrics.accumulators()))
       }
     }
 

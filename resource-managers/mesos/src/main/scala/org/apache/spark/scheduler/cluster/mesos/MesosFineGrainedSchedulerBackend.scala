@@ -30,6 +30,7 @@ import org.apache.mesos.protobuf.ByteString
 import org.apache.spark.{SparkContext, SparkException, TaskState}
 import org.apache.spark.executor.MesosExecutorBackend
 import org.apache.spark.scheduler._
+import org.apache.spark.scheduler.cluster.CoarseGrainedSchedulerBackend.abortTaskSetManager
 import org.apache.spark.scheduler.cluster.ExecutorInfo
 import org.apache.spark.serializer.SerializerInstance
 import org.apache.spark.util.Utils
@@ -319,11 +320,9 @@ private[spark] class MesosFineGrainedSchedulerBackend(
               slaveIdToResources(slaveId) = remainingResources
             } catch {
               case NonFatal(e) =>
-                scheduler.taskIdToTaskSetManager.get(taskDesc.taskId).foreach { taskSetMgr =>
-                  taskSetMgr.abort(
-                    s"Failed to serialize task ${taskDesc.taskId}, not attempting to retry it.",
-                    Some(e))
-                }
+                val taskId = taskDesc.taskId
+                val msg = s"Failed to serialize task $taskId, not attempting to retry it."
+                abortTaskSetManager(scheduler, taskId, msg, Some(e))
             }
           }
         }
