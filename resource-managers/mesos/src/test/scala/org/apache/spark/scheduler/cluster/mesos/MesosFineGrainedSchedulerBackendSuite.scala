@@ -264,7 +264,10 @@ class MesosFineGrainedSchedulerBackendSuite
 
     val taskMetrics = TaskMetrics.empty
     val taskContextImpl = mock[org.apache.spark.TaskContextImpl]
-    val task = new org.apache.spark.scheduler.Task[Int](0, 0, 0) {
+    val serializedTaskMetrics = env.closureSerializer.newInstance().
+      serialize(TaskMetrics.registered).array()
+    val task = new org.apache.spark.scheduler.Task[Int](0, 0, 0,
+      serializedTaskMetrics = serializedTaskMetrics) {
       context = taskContextImpl
       taskMetrics.incMemoryBytesSpilled(10)
       override def runTask(tc: TaskContext): Int = 0
@@ -381,7 +384,10 @@ class MesosFineGrainedSchedulerBackendSuite
 
     val taskMetrics = TaskMetrics.empty
     val taskContextImpl = mock[org.apache.spark.TaskContextImpl]
-    val task = new org.apache.spark.scheduler.Task[Int](0, 0, 0) {
+    val serializedTaskMetrics = env.closureSerializer.newInstance().
+      serialize(TaskMetrics.registered).array()
+    val task = new org.apache.spark.scheduler.Task[Int](0, 0, 0,
+      serializedTaskMetrics = serializedTaskMetrics) {
       context = taskContextImpl
       taskMetrics.incMemoryBytesSpilled(10)
       override def runTask(tc: TaskContext): Int = 0
