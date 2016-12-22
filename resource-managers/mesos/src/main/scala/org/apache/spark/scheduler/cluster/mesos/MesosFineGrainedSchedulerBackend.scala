@@ -303,7 +303,6 @@ private[spark] class MesosFineGrainedSchedulerBackend(
 
       // Call into the TaskSchedulerImpl
       val acceptedOffers = scheduler.resourceOffers(workerOffers).filter(!_.isEmpty)
-
       acceptedOffers
         .foreach { offer =>
           offer.foreach { taskDesc =>
