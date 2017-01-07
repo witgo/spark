@@ -556,6 +556,8 @@ class MesosCoarseGrainedSchedulerBackendSuite extends SparkFunSuite
       override protected def createDriverEndpointRef(
           properties: ArrayBuffer[(String, String)]): RpcEndpointRef = endpoint
 
+      override protected def createSerializeTaskEndpointRef(): RpcEndpointRef = null
+
       // override to avoid race condition with the driver thread on `mesosDriver`
       override def startScheduler(newDriver: SchedulerDriver): Unit = {
         mesosDriver = newDriver
