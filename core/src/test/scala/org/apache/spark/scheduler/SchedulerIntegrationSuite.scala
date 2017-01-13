@@ -395,7 +395,7 @@ private[spark] abstract class MockBackend(
     // get the task now, since that requires a lock on TaskSchedulerImpl, to prevent individual
     // tests from introducing a race if they need it
     val newTasks = taskScheduler.synchronized {
-      newTaskDescriptions.map { taskDescription =>
+      newTaskDescriptions.map { case (taskDescription, _) =>
         val taskSet = taskScheduler.taskIdToTaskSetManager(taskDescription.taskId).taskSet
         val task = taskSet.tasks(taskDescription.index)
         (taskDescription, task)

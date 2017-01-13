@@ -138,7 +138,7 @@ class TaskSchedulerImplSuite extends SparkFunSuite with LocalSparkContext with B
     val selectedExecutorIds = 1.to(numTrials).map { _ =>
       val taskSet = FakeTask.createTaskSet(1)
       taskScheduler.submitTasks(taskSet)
-      val taskDescriptions = taskScheduler.resourceOffers(workerOffers).flatten
+      val taskDescriptions = taskScheduler.resourceOffers(workerOffers).flatten.map(_._1)
       assert(1 === taskDescriptions.length)
       taskDescriptions(0).executorId
     }
@@ -156,7 +156,7 @@ class TaskSchedulerImplSuite extends SparkFunSuite with LocalSparkContext with B
       new WorkerOffer("executor1", "host1", 0))
     val taskSet = FakeTask.createTaskSet(1)
     taskScheduler.submitTasks(taskSet)
-    var taskDescriptions = taskScheduler.resourceOffers(zeroCoreWorkerOffers).flatten
+    var taskDescriptions = taskScheduler.resourceOffers(zeroCoreWorkerOffers).flatten.map(_._1)
     assert(0 === taskDescriptions.length)
 
     // No tasks should run as we only have 1 core free.
@@ -164,7 +164,7 @@ class TaskSchedulerImplSuite extends SparkFunSuite with LocalSparkContext with B
     val singleCoreWorkerOffers = IndexedSeq(new WorkerOffer("executor0", "host0", numFreeCores),
       new WorkerOffer("executor1", "host1", numFreeCores))
     taskScheduler.submitTasks(taskSet)
-    taskDescriptions = taskScheduler.resourceOffers(singleCoreWorkerOffers).flatten
+    taskDescriptions = taskScheduler.resourceOffers(singleCoreWorkerOffers).flatten.map(_._1)
     assert(0 === taskDescriptions.length)
 
     // Now change the offers to have 2 cores in one executor and verify if it
@@ -172,7 +172,7 @@ class TaskSchedulerImplSuite extends SparkFunSuite with LocalSparkContext with B
     val multiCoreWorkerOffers = IndexedSeq(new WorkerOffer("executor0", "host0", taskCpus),
       new WorkerOffer("executor1", "host1", numFreeCores))
     taskScheduler.submitTasks(taskSet)
-    taskDescriptions = taskScheduler.resourceOffers(multiCoreWorkerOffers).flatten
+    taskDescriptions = taskScheduler.resourceOffers(multiCoreWorkerOffers).flatten.map(_._1)
     assert(1 === taskDescriptions.length)
     assert("executor0" === taskDescriptions(0).executorId)
     assert(!failedTaskSet)
@@ -222,7 +222,7 @@ class TaskSchedulerImplSuite extends SparkFunSuite with LocalSparkContext with B
 
     // submit attempt 2, offer some resources, some tasks get scheduled
     taskScheduler.submitTasks(attempt2)
-    val taskDescriptions3 = taskScheduler.resourceOffers(workerOffers).flatten
+    val taskDescriptions3 = taskScheduler.resourceOffers(workerOffers).flatten.map(_._1)
     assert(1 === taskDescriptions3.length)
     val mgr = taskScheduler.taskIdToTaskSetManager.get(taskDescriptions3(0).taskId).get
     assert(mgr.taskSet.stageAttemptId === 1)
@@ -246,7 +246,7 @@ class TaskSchedulerImplSuite extends SparkFunSuite with LocalSparkContext with B
     mgr1.isZombie = true
 
     // don't schedule anything on another resource offer
-    val taskDescriptions2 = taskScheduler.resourceOffers(workerOffers).flatten
+    val taskDescriptions2 = taskScheduler.resourceOffers(workerOffers).flatten.map(_._1)
     assert(0 === taskDescriptions2.length)
 
     // submit attempt 2
@@ -258,7 +258,7 @@ class TaskSchedulerImplSuite extends SparkFunSuite with LocalSparkContext with B
     taskScheduler.taskSetFinished(mgr1)
 
     // now with another resource offer, we should still schedule all the tasks in attempt2
-    val taskDescriptions3 = taskScheduler.resourceOffers(workerOffers).flatten
+    val taskDescriptions3 = taskScheduler.resourceOffers(workerOffers).flatten.map(_._1)
     assert(10 === taskDescriptions3.length)
 
     taskDescriptions3.foreach { task =>
@@ -292,7 +292,7 @@ class TaskSchedulerImplSuite extends SparkFunSuite with LocalSparkContext with B
 
     // executor0's tasks should have failed now that the loss reason is known, so offering more
     // resources should make them be scheduled on the new executor.
-    val taskDescriptions3 = taskScheduler.resourceOffers(e1Offers).flatten
+    val taskDescriptions3 = taskScheduler.resourceOffers(e1Offers).flatten.map(_._1)
     assert(1 === taskDescriptions3.length)
     assert("executor1" === taskDescriptions3(0).executorId)
     assert(!failedTaskSet)
@@ -322,7 +322,7 @@ class TaskSchedulerImplSuite extends SparkFunSuite with LocalSparkContext with B
       new WorkerOffer("executor2", "host1", 1),
       new WorkerOffer("executor3", "host2", 10)
     )
-    val firstTaskAttempts = taskScheduler.resourceOffers(offers).flatten
+    val firstTaskAttempts = taskScheduler.resourceOffers(offers).flatten.map(_._1)
     // We should schedule all tasks.
     assert(firstTaskAttempts.size === 6)
     // Whenever we schedule a task, we must consult the node and executor blacklist.  (The test
@@ -366,8 +366,8 @@ class TaskSchedulerImplSuite extends SparkFunSuite with LocalSparkContext with B
         (0 until 4).foreach { attempt =>
           assert(task.attemptNumber === attempt)
           tsm.handleFailedTask(task.taskId, TaskState.FAILED, TaskResultLost)
-          val nextAttempts =
-            taskScheduler.resourceOffers(IndexedSeq(WorkerOffer("executor4", "host4", 1))).flatten
+          val nextAttempts = taskScheduler.resourceOffers(IndexedSeq(WorkerOffer("executor4",
+            "host4", 1))).flatten.map(_._1)
           if (attempt < 3) {
             assert(nextAttempts.size === 1)
             task = nextAttempts(0)
@@ -433,7 +433,7 @@ class TaskSchedulerImplSuite extends SparkFunSuite with LocalSparkContext with B
       stageId -> tsm
     }.toMap
 
-    val firstTaskAttempts = taskScheduler.resourceOffers(offers).flatten
+    val firstTaskAttempts = taskScheduler.resourceOffers(offers).flatten.map(_._1)
     firstTaskAttempts.foreach { task => logInfo(s"scheduled $task on ${task.executorId}") }
     assert(firstTaskAttempts.size === 1)
     assert(firstTaskAttempts.head.executorId === "executor4")
@@ -608,7 +608,7 @@ class TaskSchedulerImplSuite extends SparkFunSuite with LocalSparkContext with B
     val firstTaskAttempts = taskScheduler.resourceOffers(IndexedSeq(
       new WorkerOffer("executor0", "host0", 1),
       new WorkerOffer("executor1", "host1", 1)
-    )).flatten
+    )).flatten.map(_._1)
     assert(Set("executor0", "executor1") === firstTaskAttempts.map(_.executorId).toSet)
 
     // Fail one of the tasks, but leave the other running.
@@ -621,8 +621,8 @@ class TaskSchedulerImplSuite extends SparkFunSuite with LocalSparkContext with B
     // Now we fail our second executor.  The other task can still run on executor1, so make an offer
     // on that executor, and make sure that the other task (not the failed one) is assigned there.
     taskScheduler.executorLost("executor1", SlaveLost("oops"))
-    val nextTaskAttempts =
-      taskScheduler.resourceOffers(IndexedSeq(new WorkerOffer("executor0", "host0", 1))).flatten
+    val nextTaskAttempts = taskScheduler.resourceOffers(IndexedSeq(new WorkerOffer("executor0",
+      "host0", 1))).flatten.map(_._1)
     // Note: Its OK if some future change makes this already realize the taskset has become
     // unschedulable at this point (though in the current implementation, we're sure it will not).
     assert(nextTaskAttempts.size === 1)
@@ -662,7 +662,7 @@ class TaskSchedulerImplSuite extends SparkFunSuite with LocalSparkContext with B
       new WorkerOffer("executor0", "host0", 4),
       new WorkerOffer("executor1", "host1", 4)
     )
-    val firstTaskAttempts = taskScheduler.resourceOffers(offers).flatten
+    val firstTaskAttempts = taskScheduler.resourceOffers(offers).flatten.map(_._1)
     assert(firstTaskAttempts.size == 2)
     firstTaskAttempts.foreach { taskAttempt => assert("executor0" === taskAttempt.executorId) }
 
@@ -675,7 +675,7 @@ class TaskSchedulerImplSuite extends SparkFunSuite with LocalSparkContext with B
     // successfully.  Because the scheduler first tries to schedule with locality in mind, at first
     // it won't schedule anything on executor1.  But despite that, we don't abort the job.  Then the
     // scheduler tries for ANY locality, and successfully schedules tasks on executor1.
-    val secondTaskAttempts = taskScheduler.resourceOffers(offers).flatten
+    val secondTaskAttempts = taskScheduler.resourceOffers(offers).flatten.map(_._1)
     assert(secondTaskAttempts.size == 2)
     secondTaskAttempts.foreach { taskAttempt => assert("executor1" === taskAttempt.executorId) }
     assert(!failedTaskSet)
@@ -691,7 +691,7 @@ class TaskSchedulerImplSuite extends SparkFunSuite with LocalSparkContext with B
     val taskDescs = taskScheduler.resourceOffers(IndexedSeq(
       new WorkerOffer("executor0", "host0", 1),
       new WorkerOffer("executor1", "host1", 1)
-    )).flatten
+    )).flatten.map(_._1)
     // only schedule one task because of locality
     assert(taskDescs.size === 1)
 
@@ -776,7 +776,7 @@ class TaskSchedulerImplSuite extends SparkFunSuite with LocalSparkContext with B
 
     // submit attempt 1, offer resources, task gets scheduled
     taskScheduler.submitTasks(attempt1)
-    val taskDescriptions = taskScheduler.resourceOffers(e0Offers).flatten
+    val taskDescriptions = taskScheduler.resourceOffers(e0Offers).flatten.map(_._1)
     assert(1 === taskDescriptions.length)
 
     // Report the task as failed with TaskState.LOST

@@ -21,6 +21,8 @@ import java.io.File
 import java.net.URL
 import java.nio.ByteBuffer
 
+import scala.util.control.NonFatal
+
 import org.apache.spark.{SparkConf, SparkContext, SparkEnv, TaskState}
 import org.apache.spark.TaskState.TaskState
 import org.apache.spark.executor.{Executor, ExecutorBackend}
@@ -28,6 +30,7 @@ import org.apache.spark.internal.Logging
 import org.apache.spark.launcher.{LauncherBackend, SparkAppHandle}
 import org.apache.spark.rpc.{RpcCallContext, RpcEndpointRef, RpcEnv, ThreadSafeRpcEndpoint}
 import org.apache.spark.scheduler._
+import org.apache.spark.scheduler.cluster.CoarseGrainedSchedulerBackend.abortTaskSetManager
 import org.apache.spark.scheduler.cluster.ExecutorInfo
 
 private case class ReviveOffers()
@@ -82,9 +85,19 @@ private[spark] class LocalEndpoint(
 
   def reviveOffers() {
     val offers = IndexedSeq(new WorkerOffer(localExecutorId, localExecutorHostname, freeCores))
-    for (task <- scheduler.resourceOffers(offers).flatten) {
-      freeCores -= scheduler.CPUS_PER_TASK
-      executor.launchTask(executorBackend, task)
+    for ((taskDescription, task) <- scheduler.resourceOffers(offers).flatten) {
+      val taskId = taskDescription.taskId
+      try {
+        taskDescription.serializedTask = TaskDescription.serializeTask(task)
+      } catch {
+        case NonFatal(e) =>
+          abortTaskSetManager(scheduler, taskId,
+            s"Failed to serialize task $taskId, not attempting to retry it.", Some(e))
+      }
+      if (taskDescription.serializedTask != null) {
+        freeCores -= scheduler.CPUS_PER_TASK
+        executor.launchTask(executorBackend, taskDescription)
+      }
     }
   }
 }

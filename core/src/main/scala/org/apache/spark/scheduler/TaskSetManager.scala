@@ -407,7 +407,7 @@ private[spark] class TaskSetManager(
       execId: String,
       host: String,
       maxLocality: TaskLocality.TaskLocality)
-    : Option[TaskDescription] =
+    : Option[(TaskDescription, Task[_])] =
   {
     val offerBlacklisted = taskSetBlacklistHelperOpt.exists { blacklist =>
       blacklist.isNodeBlacklistedForTaskSet(host) ||
@@ -454,7 +454,7 @@ private[spark] class TaskSetManager(
           s"partition ${task.partitionId}, $taskLocality)")
 
         sched.dagScheduler.taskStarted(task, info)
-        new TaskDescription(
+        (new TaskDescription(
           taskId,
           attemptNum,
           execId,
@@ -463,6 +463,7 @@ private[spark] class TaskSetManager(
           sched.sc.addedFiles,
           sched.sc.addedJars,
           task.localProperties,
+          null.asInstanceOf[ByteBuffer]),
           task)
       }
     } else {

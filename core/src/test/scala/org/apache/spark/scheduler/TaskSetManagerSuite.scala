@@ -210,7 +210,7 @@ class TaskSetManagerSuite extends SparkFunSuite with LocalSparkContext with Logg
     for (i <- 0 until 3) {
       val taskOption = manager.resourceOffer("exec1", "host1", NO_PREF)
       assert(taskOption.isDefined)
-      val task = taskOption.get
+      val task = taskOption.get._1
       assert(task.executorId === "exec1")
     }
     assert(sched.startedTasks.toSet === Set(0, 1, 2))
@@ -244,7 +244,7 @@ class TaskSetManagerSuite extends SparkFunSuite with LocalSparkContext with Logg
     // Because there are no alive PROCESS_LOCAL executors, the base locality level should be
     // NODE_LOCAL. So, we should schedule the task on this offered NODE_LOCAL executor before
     // any of the locality wait timers expire.
-    assert(manager.resourceOffer("execA", "host1", ANY).get.index === 0)
+    assert(manager.resourceOffer("execA", "host1", ANY).get._1.index === 0)
   }
 
   test("basic delay scheduling") {
@@ -259,22 +259,22 @@ class TaskSetManagerSuite extends SparkFunSuite with LocalSparkContext with Logg
     val clock = new ManualClock
     val manager = new TaskSetManager(sched, taskSet, MAX_TASK_FAILURES, clock = clock)
     // First offer host1, exec1: first task should be chosen
-    assert(manager.resourceOffer("exec1", "host1", ANY).get.index === 0)
+    assert(manager.resourceOffer("exec1", "host1", ANY).get._1.index === 0)
     assert(manager.resourceOffer("exec1", "host1", PROCESS_LOCAL) == None)
 
     clock.advance(LOCALITY_WAIT_MS)
     // Offer host1, exec1 again, at NODE_LOCAL level: the node local (task 3) should
     // get chosen before the noPref task
-    assert(manager.resourceOffer("exec1", "host1", NODE_LOCAL).get.index == 2)
+    assert(manager.resourceOffer("exec1", "host1", NODE_LOCAL).get._1.index == 2)
 
     // Offer host2, exec2, at NODE_LOCAL level: we should choose task 2
-    assert(manager.resourceOffer("exec2", "host2", NODE_LOCAL).get.index == 1)
+    assert(manager.resourceOffer("exec2", "host2", NODE_LOCAL).get._1.index == 1)
 
     // Offer host2, exec2 again, at NODE_LOCAL level: we should get noPref task
     // after failing to find a node_Local task
     assert(manager.resourceOffer("exec2", "host2", NODE_LOCAL) == None)
     clock.advance(LOCALITY_WAIT_MS)
-    assert(manager.resourceOffer("exec2", "host2", NO_PREF).get.index == 3)
+    assert(manager.resourceOffer("exec2", "host2", NO_PREF).get._1.index == 3)
   }
 
   test("we do not need to delay scheduling when we only have noPref tasks in the queue") {
@@ -288,10 +288,10 @@ class TaskSetManagerSuite extends SparkFunSuite with LocalSparkContext with Logg
     val clock = new ManualClock
     val manager = new TaskSetManager(sched, taskSet, MAX_TASK_FAILURES, clock = clock)
     // First offer host1, exec1: first task should be chosen
-    assert(manager.resourceOffer("exec1", "host1", PROCESS_LOCAL).get.index === 0)
-    assert(manager.resourceOffer("exec3", "host2", PROCESS_LOCAL).get.index === 1)
+    assert(manager.resourceOffer("exec1", "host1", PROCESS_LOCAL).get._1.index === 0)
+    assert(manager.resourceOffer("exec3", "host2", PROCESS_LOCAL).get._1.index === 1)
     assert(manager.resourceOffer("exec3", "host2", NODE_LOCAL) == None)
-    assert(manager.resourceOffer("exec3", "host2", NO_PREF).get.index === 2)
+    assert(manager.resourceOffer("exec3", "host2", NO_PREF).get._1.index === 2)
   }
 
   test("delay scheduling with fallback") {
@@ -309,7 +309,7 @@ class TaskSetManagerSuite extends SparkFunSuite with LocalSparkContext with Logg
     val manager = new TaskSetManager(sched, taskSet, MAX_TASK_FAILURES, clock = clock)
 
     // First offer host1: first task should be chosen
-    assert(manager.resourceOffer("exec1", "host1", ANY).get.index === 0)
+    assert(manager.resourceOffer("exec1", "host1", ANY).get._1.index === 0)
 
     // Offer host1 again: nothing should get chosen
     assert(manager.resourceOffer("exec1", "host1", ANY) === None)
@@ -317,13 +317,13 @@ class TaskSetManagerSuite extends SparkFunSuite with LocalSparkContext with Logg
     clock.advance(LOCALITY_WAIT_MS)
 
     // Offer host1 again: second task (on host2) should get chosen
-    assert(manager.resourceOffer("exec1", "host1", ANY).get.index === 1)
+    assert(manager.resourceOffer("exec1", "host1", ANY).get._1.index === 1)
 
     // Offer host1 again: third task (on host2) should get chosen
-    assert(manager.resourceOffer("exec1", "host1", ANY).get.index === 2)
+    assert(manager.resourceOffer("exec1", "host1", ANY).get._1.index === 2)
 
     // Offer host2: fifth task (also on host2) should get chosen
-    assert(manager.resourceOffer("exec2", "host2", ANY).get.index === 4)
+    assert(manager.resourceOffer("exec2", "host2", ANY).get._1.index === 4)
 
     // Now that we've launched a local task, we should no longer launch the task for host3
     assert(manager.resourceOffer("exec2", "host2", ANY) === None)
@@ -331,7 +331,7 @@ class TaskSetManagerSuite extends SparkFunSuite with LocalSparkContext with Logg
     clock.advance(LOCALITY_WAIT_MS)
 
     // After another delay, we can go ahead and launch that task non-locally
-    assert(manager.resourceOffer("exec2", "host2", ANY).get.index === 3)
+    assert(manager.resourceOffer("exec2", "host2", ANY).get._1.index === 3)
   }
 
   test("delay scheduling with failed hosts") {
@@ -347,7 +347,7 @@ class TaskSetManagerSuite extends SparkFunSuite with LocalSparkContext with Logg
     val manager = new TaskSetManager(sched, taskSet, MAX_TASK_FAILURES, clock = clock)
 
     // First offer host1: first task should be chosen
-    assert(manager.resourceOffer("exec1", "host1", ANY).get.index === 0)
+    assert(manager.resourceOffer("exec1", "host1", ANY).get._1.index === 0)
 
     // After this, nothing should get chosen, because we have separated tasks with unavailable
     // preference from the noPrefPendingTasks
@@ -363,8 +363,8 @@ class TaskSetManagerSuite extends SparkFunSuite with LocalSparkContext with Logg
     clock.advance(LOCALITY_WAIT_MS * 2)
 
     // task 1 and 2 would be scheduled as nonLocal task
-    assert(manager.resourceOffer("exec1", "host1", ANY).get.index === 1)
-    assert(manager.resourceOffer("exec1", "host1", ANY).get.index === 2)
+    assert(manager.resourceOffer("exec1", "host1", ANY).get._1.index === 1)
+    assert(manager.resourceOffer("exec1", "host1", ANY).get._1.index === 2)
 
     // all finished
     assert(manager.resourceOffer("exec1", "host1", ANY) === None)
@@ -378,14 +378,14 @@ class TaskSetManagerSuite extends SparkFunSuite with LocalSparkContext with Logg
     val clock = new ManualClock
     val manager = new TaskSetManager(sched, taskSet, MAX_TASK_FAILURES, clock = clock)
 
-    assert(manager.resourceOffer("exec1", "host1", ANY).get.index === 0)
+    assert(manager.resourceOffer("exec1", "host1", ANY).get._1.index === 0)
 
     // Tell it the task has finished but the result was lost.
     manager.handleFailedTask(0, TaskState.FINISHED, TaskResultLost)
     assert(sched.endedTasks(0) === TaskResultLost)
 
     // Re-offer the host -- now we should get task 0 again.
-    assert(manager.resourceOffer("exec1", "host1", ANY).get.index === 0)
+    assert(manager.resourceOffer("exec1", "host1", ANY).get._1.index === 0)
   }
 
   test("repeated failures lead to task set abortion") {
@@ -401,8 +401,8 @@ class TaskSetManagerSuite extends SparkFunSuite with LocalSparkContext with Logg
       val offerResult = manager.resourceOffer("exec1", "host1", ANY)
       assert(offerResult.isDefined,
         "Expect resource offer on iteration %s to return a task".format(index))
-      assert(offerResult.get.index === 0)
-      manager.handleFailedTask(offerResult.get.taskId, TaskState.FINISHED, TaskResultLost)
+      assert(offerResult.get._1.index === 0)
+      manager.handleFailedTask(offerResult.get._1.taskId, TaskState.FINISHED, TaskResultLost)
       if (index < MAX_TASK_FAILURES) {
         assert(!sched.taskSetsFailed.contains(taskSet.id))
       } else {
@@ -435,11 +435,11 @@ class TaskSetManagerSuite extends SparkFunSuite with LocalSparkContext with Logg
       val offerResult = manager.resourceOffer("exec1", "host1", PROCESS_LOCAL)
       assert(offerResult.isDefined, "Expect resource offer to return a task")
 
-      assert(offerResult.get.index === 0)
-      assert(offerResult.get.executorId === "exec1")
+      assert(offerResult.get._1.index === 0)
+      assert(offerResult.get._1.executorId === "exec1")
 
       // Cause exec1 to fail : failure 1
-      manager.handleFailedTask(offerResult.get.taskId, TaskState.FINISHED, TaskResultLost)
+      manager.handleFailedTask(offerResult.get._1.taskId, TaskState.FINISHED, TaskResultLost)
       assert(!sched.taskSetsFailed.contains(taskSet.id))
 
       // Ensure scheduling on exec1 fails after failure 1 due to blacklist
@@ -455,11 +455,11 @@ class TaskSetManagerSuite extends SparkFunSuite with LocalSparkContext with Logg
       assert(offerResult.isDefined,
         "Expect resource offer to return a task for exec1.1, offerResult = " + offerResult)
 
-      assert(offerResult.get.index === 0)
-      assert(offerResult.get.executorId === "exec1.1")
+      assert(offerResult.get._1.index === 0)
+      assert(offerResult.get._1.executorId === "exec1.1")
 
       // Cause exec1.1 to fail : failure 2
-      manager.handleFailedTask(offerResult.get.taskId, TaskState.FINISHED, TaskResultLost)
+      manager.handleFailedTask(offerResult.get._1.taskId, TaskState.FINISHED, TaskResultLost)
       assert(!sched.taskSetsFailed.contains(taskSet.id))
 
       // Ensure scheduling on exec1.1 fails after failure 2 due to blacklist
@@ -471,11 +471,11 @@ class TaskSetManagerSuite extends SparkFunSuite with LocalSparkContext with Logg
       val offerResult = manager.resourceOffer("exec2", "host2", ANY)
       assert(offerResult.isDefined, "Expect resource offer to return a task")
 
-      assert(offerResult.get.index === 0)
-      assert(offerResult.get.executorId === "exec2")
+      assert(offerResult.get._1.index === 0)
+      assert(offerResult.get._1.executorId === "exec2")
 
       // Cause exec2 to fail : failure 3
-      manager.handleFailedTask(offerResult.get.taskId, TaskState.FINISHED, TaskResultLost)
+      manager.handleFailedTask(offerResult.get._1.taskId, TaskState.FINISHED, TaskResultLost)
       assert(!sched.taskSetsFailed.contains(taskSet.id))
 
       // Ensure scheduling on exec2 fails after failure 3 due to blacklist
@@ -494,13 +494,13 @@ class TaskSetManagerSuite extends SparkFunSuite with LocalSparkContext with Logg
     {
       val offerResult = manager.resourceOffer("exec3", "host3", ANY)
       assert(offerResult.isDefined)
-      assert(offerResult.get.index === 0)
-      assert(offerResult.get.executorId === "exec3")
+      assert(offerResult.get._1.index === 0)
+      assert(offerResult.get._1.executorId === "exec3")
 
       assert(manager.resourceOffer("exec3", "host3", ANY).isEmpty)
 
       // Cause exec3 to fail : failure 4
-      manager.handleFailedTask(offerResult.get.taskId, TaskState.FINISHED, TaskResultLost)
+      manager.handleFailedTask(offerResult.get._1.taskId, TaskState.FINISHED, TaskResultLost)
     }
 
     // we have failed the same task 4 times now : task id should now be in taskSetsFailed
@@ -591,10 +591,10 @@ class TaskSetManagerSuite extends SparkFunSuite with LocalSparkContext with Logg
     // No task is scheduled if we restrict locality to RACK_LOCAL
     assert(manager.resourceOffer("execC", "host3", RACK_LOCAL) === None)
     // Task 0 can be scheduled with ANY
-    assert(manager.resourceOffer("execC", "host3", ANY).get.index === 0)
+    assert(manager.resourceOffer("execC", "host3", ANY).get._1.index === 0)
     // Offer host2
     // Task 1 can be scheduled with RACK_LOCAL
-    assert(manager.resourceOffer("execB", "host2", RACK_LOCAL).get.index === 1)
+    assert(manager.resourceOffer("execB", "host2", RACK_LOCAL).get._1.index === 1)
   }
 
   test("do not emit warning when serialized task is small") {
@@ -605,7 +605,7 @@ class TaskSetManagerSuite extends SparkFunSuite with LocalSparkContext with Logg
 
     assert(!manager.emittedTaskSizeWarning)
 
-    assert(manager.resourceOffer("exec1", "host1", ANY).get.index === 0)
+    assert(manager.resourceOffer("exec1", "host1", ANY).get._1.index === 0)
 
     assert(!manager.emittedTaskSizeWarning)
   }
@@ -647,19 +647,19 @@ class TaskSetManagerSuite extends SparkFunSuite with LocalSparkContext with Logg
     val clock = new ManualClock
     val manager = new TaskSetManager(sched, taskSet, MAX_TASK_FAILURES, clock = clock)
 
-    assert(manager.resourceOffer("execA", "host1", PROCESS_LOCAL).get.index === 0)
+    assert(manager.resourceOffer("execA", "host1", PROCESS_LOCAL).get._1.index === 0)
     assert(manager.resourceOffer("execA", "host1", NODE_LOCAL) == None)
-    assert(manager.resourceOffer("execA", "host1", NO_PREF).get.index == 1)
+    assert(manager.resourceOffer("execA", "host1", NO_PREF).get._1.index == 1)
 
     manager.speculatableTasks += 1
     clock.advance(LOCALITY_WAIT_MS)
     // schedule the nonPref task
-    assert(manager.resourceOffer("execA", "host1", NO_PREF).get.index === 2)
+    assert(manager.resourceOffer("execA", "host1", NO_PREF).get._1.index === 2)
     // schedule the speculative task
-    assert(manager.resourceOffer("execB", "host2", NO_PREF).get.index === 1)
+    assert(manager.resourceOffer("execB", "host2", NO_PREF).get._1.index === 1)
     clock.advance(LOCALITY_WAIT_MS * 3)
     // schedule non-local tasks
-    assert(manager.resourceOffer("execB", "host2", ANY).get.index === 3)
+    assert(manager.resourceOffer("execB", "host2", ANY).get._1.index === 3)
   }
 
   test("node-local tasks should be scheduled right away " +
@@ -676,13 +676,13 @@ class TaskSetManagerSuite extends SparkFunSuite with LocalSparkContext with Logg
     val manager = new TaskSetManager(sched, taskSet, MAX_TASK_FAILURES, clock = clock)
 
     // node-local tasks are scheduled without delay
-    assert(manager.resourceOffer("execA", "host1", NODE_LOCAL).get.index === 0)
-    assert(manager.resourceOffer("execA", "host2", NODE_LOCAL).get.index === 1)
-    assert(manager.resourceOffer("execA", "host3", NODE_LOCAL).get.index === 3)
+    assert(manager.resourceOffer("execA", "host1", NODE_LOCAL).get._1.index === 0)
+    assert(manager.resourceOffer("execA", "host2", NODE_LOCAL).get._1.index === 1)
+    assert(manager.resourceOffer("execA", "host3", NODE_LOCAL).get._1.index === 3)
     assert(manager.resourceOffer("execA", "host3", NODE_LOCAL) === None)
 
     // schedule no-preference after node local ones
-    assert(manager.resourceOffer("execA", "host3", NO_PREF).get.index === 2)
+    assert(manager.resourceOffer("execA", "host3", NO_PREF).get._1.index === 2)
   }
 
   test("SPARK-4939: node-local tasks should be scheduled right after process-local tasks finished")
@@ -698,11 +698,11 @@ class TaskSetManagerSuite extends SparkFunSuite with LocalSparkContext with Logg
     val manager = new TaskSetManager(sched, taskSet, MAX_TASK_FAILURES, clock = clock)
 
     // process-local tasks are scheduled first
-    assert(manager.resourceOffer("execA", "host1", NODE_LOCAL).get.index === 2)
-    assert(manager.resourceOffer("execB", "host2", NODE_LOCAL).get.index === 3)
+    assert(manager.resourceOffer("execA", "host1", NODE_LOCAL).get._1.index === 2)
+    assert(manager.resourceOffer("execB", "host2", NODE_LOCAL).get._1.index === 3)
     // node-local tasks are scheduled without delay
-    assert(manager.resourceOffer("execA", "host1", NODE_LOCAL).get.index === 0)
-    assert(manager.resourceOffer("execB", "host2", NODE_LOCAL).get.index === 1)
+    assert(manager.resourceOffer("execA", "host1", NODE_LOCAL).get._1.index === 0)
+    assert(manager.resourceOffer("execB", "host2", NODE_LOCAL).get._1.index === 1)
     assert(manager.resourceOffer("execA", "host1", NODE_LOCAL) == None)
     assert(manager.resourceOffer("execB", "host2", NODE_LOCAL) == None)
   }
@@ -718,12 +718,12 @@ class TaskSetManagerSuite extends SparkFunSuite with LocalSparkContext with Logg
     val manager = new TaskSetManager(sched, taskSet, MAX_TASK_FAILURES, clock = clock)
 
     // process-local tasks are scheduled first
-    assert(manager.resourceOffer("execA", "host1", PROCESS_LOCAL).get.index === 1)
-    assert(manager.resourceOffer("execB", "host2", PROCESS_LOCAL).get.index === 2)
+    assert(manager.resourceOffer("execA", "host1", PROCESS_LOCAL).get._1.index === 1)
+    assert(manager.resourceOffer("execB", "host2", PROCESS_LOCAL).get._1.index === 2)
     // no-pref tasks are scheduled without delay
     assert(manager.resourceOffer("execA", "host1", PROCESS_LOCAL) == None)
     assert(manager.resourceOffer("execA", "host1", NODE_LOCAL) == None)
-    assert(manager.resourceOffer("execA", "host1", NO_PREF).get.index === 0)
+    assert(manager.resourceOffer("execA", "host1", NO_PREF).get._1.index === 0)
     assert(manager.resourceOffer("execA", "host1", ANY) == None)
   }
 
@@ -810,7 +810,7 @@ class TaskSetManagerSuite extends SparkFunSuite with LocalSparkContext with Logg
       val taskOption = manager.resourceOffer(k, v, NO_PREF)
       assert(taskOption.isDefined)
       val task = taskOption.get
-      assert(task.executorId === k)
+      assert(task._1.executorId === k)
     }
     assert(sched.startedTasks.toSet === Set(0, 1, 2, 3))
     // Complete the 3 tasks and leave 1 task in running
@@ -828,10 +828,10 @@ class TaskSetManagerSuite extends SparkFunSuite with LocalSparkContext with Logg
     val taskOption5 = manager.resourceOffer("exec1", "host1", NO_PREF)
     assert(taskOption5.isDefined)
     val task5 = taskOption5.get
-    assert(task5.index === 3)
-    assert(task5.taskId === 4)
-    assert(task5.executorId === "exec1")
-    assert(task5.attemptNumber === 1)
+    assert(task5._1.index === 3)
+    assert(task5._1.taskId === 4)
+    assert(task5._1.executorId === "exec1")
+    assert(task5._1.attemptNumber === 1)
     sched.backend = mock(classOf[SchedulerBackend])
     // Complete the speculative attempt for the running task
     manager.handleSuccessfulTask(4, createTaskResult(3, accumUpdatesByTask(3)))
@@ -866,8 +866,8 @@ class TaskSetManagerSuite extends SparkFunSuite with LocalSparkContext with Logg
       val taskOption = manager.resourceOffer(k, v, NO_PREF)
       assert(taskOption.isDefined)
       val task = taskOption.get
-      assert(task.executorId === k)
-      tasks += task
+      assert(task._1.executorId === k)
+      tasks += task._1
     }
     assert(sched.startedTasks.toSet === (0 until 5).toSet)
     // Complete 3 tasks and leave 2 tasks in running
@@ -897,7 +897,7 @@ class TaskSetManagerSuite extends SparkFunSuite with LocalSparkContext with Logg
         assert(!manager.isZombie)
         val nextTask = manager.resourceOffer(s"exec2", s"host2", NO_PREF)
         assert(nextTask.isDefined, s"no offer for attempt $attempt of $index")
-        tasks += nextTask.get
+        tasks += nextTask.get._1
       }
     }
 
@@ -913,15 +913,15 @@ class TaskSetManagerSuite extends SparkFunSuite with LocalSparkContext with Logg
     val taskOption5 = manager.resourceOffer("exec1", "host1", NO_PREF)
     assert(taskOption5.isDefined)
     val speculativeTask = taskOption5.get
-    assert(speculativeTask.index === 3 || speculativeTask.index === 4)
-    assert(speculativeTask.taskId === 11)
-    assert(speculativeTask.executorId === "exec1")
-    assert(speculativeTask.attemptNumber === 4)
+    assert(speculativeTask._1.index === 3 || speculativeTask._1.index === 4)
+    assert(speculativeTask._1.taskId === 11)
+    assert(speculativeTask._1.executorId === "exec1")
+    assert(speculativeTask._1.attemptNumber === 4)
     sched.backend = mock(classOf[SchedulerBackend])
     // Complete the speculative attempt for the running task
-    manager.handleSuccessfulTask(speculativeTask.taskId, createTaskResult(3, accumUpdatesByTask(3)))
+    manager.handleSuccessfulTask(speculativeTask._1.taskId, createTaskResult(3, accumUpdatesByTask(3)))
     // Verify that it kills other running attempt
-    val origTask = originalTasks(speculativeTask.index)
+    val origTask = originalTasks(speculativeTask._1.index)
     verify(sched.backend).killTask(origTask.taskId, "exec2", true)
     // Because the SchedulerBackend was a mock, the 2nd copy of the task won't actually be
     // killed, so the FakeTaskScheduler is only told about the successful completion
@@ -938,14 +938,14 @@ class TaskSetManagerSuite extends SparkFunSuite with LocalSparkContext with Logg
     val taskOpt6 = manager.resourceOffer("exec1", "host1", NO_PREF)
     assert(taskOpt6.isDefined)
     val speculativeTask2 = taskOpt6.get
-    assert(speculativeTask2.index === 3 || speculativeTask2.index === 4)
-    assert(speculativeTask2.index !== speculativeTask.index)
-    assert(speculativeTask2.attemptNumber === 4)
+    assert(speculativeTask2._1.index === 3 || speculativeTask2._1.index === 4)
+    assert(speculativeTask2._1.index !== speculativeTask._1.index)
+    assert(speculativeTask2._1.attemptNumber === 4)
     // Complete the speculative attempt for the running task
-    manager.handleSuccessfulTask(speculativeTask2.taskId,
+    manager.handleSuccessfulTask(speculativeTask2._1.taskId,
       createTaskResult(3, accumUpdatesByTask(3)))
     // Verify that it kills other running attempt
-    val origTask2 = originalTasks(speculativeTask2.index)
+    val origTask2 = originalTasks(speculativeTask2._1.index)
     verify(sched.backend).killTask(origTask2.taskId, "exec2", true)
     assert(manager.tasksSuccessful === 5)
     assert(manager.isZombie)
@@ -995,13 +995,13 @@ class TaskSetManagerSuite extends SparkFunSuite with LocalSparkContext with Logg
     assert(taskDescs.size === 4)
 
     // now fail those tasks
-    tsmSpy.handleFailedTask(taskDescs(0).taskId, TaskState.FAILED,
-      FetchFailed(BlockManagerId(taskDescs(0).executorId, "host1", 12345), 0, 0, 0, "ignored"))
-    tsmSpy.handleFailedTask(taskDescs(1).taskId, TaskState.FAILED,
-      ExecutorLostFailure(taskDescs(1).executorId, exitCausedByApp = false, reason = None))
-    tsmSpy.handleFailedTask(taskDescs(2).taskId, TaskState.FAILED,
+    tsmSpy.handleFailedTask(taskDescs(0)._1.taskId, TaskState.FAILED,
+      FetchFailed(BlockManagerId(taskDescs(0)._1.executorId, "host1", 12345), 0, 0, 0, "ignored"))
+    tsmSpy.handleFailedTask(taskDescs(1)._1.taskId, TaskState.FAILED,
+      ExecutorLostFailure(taskDescs(1)._1.executorId, exitCausedByApp = false, reason = None))
+    tsmSpy.handleFailedTask(taskDescs(2)._1.taskId, TaskState.FAILED,
       TaskCommitDenied(0, 2, 0))
-    tsmSpy.handleFailedTask(taskDescs(3).taskId, TaskState.KILLED,
+    tsmSpy.handleFailedTask(taskDescs(3)._1.taskId, TaskState.KILLED,
       TaskKilled)
 
     // Make sure that the blacklist ignored all of the task failures above, since they aren't

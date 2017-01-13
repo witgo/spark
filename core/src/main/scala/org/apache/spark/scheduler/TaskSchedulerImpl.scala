@@ -269,7 +269,7 @@ private[spark] class TaskSchedulerImpl private[scheduler](
       maxLocality: TaskLocality,
       shuffledOffers: Seq[WorkerOffer],
       availableCpus: Array[Int],
-      tasks: IndexedSeq[ArrayBuffer[TaskDescription]]) : Boolean = {
+      tasks: IndexedSeq[ArrayBuffer[(TaskDescription, Task[_])]]) : Boolean = {
     var launchedTask = false
     // nodes and executors that are blacklisted for the entire application have already been
     // filtered out by this point
@@ -279,7 +279,7 @@ private[spark] class TaskSchedulerImpl private[scheduler](
       if (availableCpus(i) >= CPUS_PER_TASK) {
         for (task <- taskSet.resourceOffer(execId, host, maxLocality)) {
           tasks(i) += task
-          val tid = task.taskId
+          val tid = task._1.taskId
           taskIdToTaskSetManager(tid) = taskSet
           taskIdToExecutorId(tid) = execId
           executorIdToRunningTaskIds(execId).add(tid)
@@ -297,7 +297,8 @@ private[spark] class TaskSchedulerImpl private[scheduler](
    * sets for tasks in order of priority. We fill each node with tasks in a round-robin manner so
    * that tasks are balanced across the cluster.
    */
-  def resourceOffers(offers: IndexedSeq[WorkerOffer]): Seq[Seq[TaskDescription]] = synchronized {
+  def resourceOffers(
+      offers: IndexedSeq[WorkerOffer]): Seq[Seq[(TaskDescription, Task[_])]] = synchronized {
     // Mark each slave as alive and remember its hostname
     // Also track if new executor is added
     var newExecAvail = false
@@ -332,7 +333,7 @@ private[spark] class TaskSchedulerImpl private[scheduler](
     // Randomly shuffle offers to avoid always placing tasks on the same set of workers.
     val shuffledOffers = Random.shuffle(filteredOffers)
     // Build a list of tasks to assign to each worker.
-    val tasks = shuffledOffers.map(o => new ArrayBuffer[TaskDescription](o.cores))
+    val tasks = shuffledOffers.map(o => new ArrayBuffer[(TaskDescription, Task[_])](o.cores))
     val availableCpus = shuffledOffers.map(o => o.cores).toArray
     val sortedTaskSets = rootPool.getSortedTaskSetQueue
     for (taskSet <- sortedTaskSets) {

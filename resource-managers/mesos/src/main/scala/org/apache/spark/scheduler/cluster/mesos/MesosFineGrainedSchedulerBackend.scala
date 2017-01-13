@@ -296,7 +296,8 @@ private[spark] class MesosFineGrainedSchedulerBackend(
       val acceptedOffers = scheduler.resourceOffers(workerOffers).filter(!_.isEmpty)
       acceptedOffers
         .foreach { offer =>
-          offer.foreach { taskDesc =>
+          offer.foreach {case (taskDesc, task) =>
+            taskDesc.serializedTask = TaskDescription.serializeTask(task)
             val slaveId = taskDesc.executorId
             slavesIdsOfAcceptedOffers += slaveId
             taskIdToSlaveId(taskDesc.taskId) = slaveId

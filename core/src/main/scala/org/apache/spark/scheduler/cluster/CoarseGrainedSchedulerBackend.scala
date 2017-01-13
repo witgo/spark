@@ -243,14 +243,16 @@ class CoarseGrainedSchedulerBackend(scheduler: TaskSchedulerImpl, val rpcEnv: Rp
     }
 
     // Launch tasks returned by a set of resource offers
-    private def launchTasks(tasks: Seq[Seq[TaskDescription]]) {
-      for (task <- tasks.flatten) {
+    private def launchTasks(tasks: Seq[Seq[(TaskDescription, Task[_])]]) {
+      for ((taskDescription, task) <- tasks.flatten) {
+        val taskId = taskDescription.taskId
         val serializedTask = try {
-          TaskDescription.encode(task)
+          taskDescription.serializedTask = TaskDescription.serializeTask(task)
+          TaskDescription.encode(taskDescription)
         } catch {
           case NonFatal(e) =>
-            abortTaskSetManager(scheduler, task.taskId,
-              s"Failed to serialize task ${task.taskId}, not attempting to retry it.", Some(e))
+            abortTaskSetManager(scheduler, taskId,
+              s"Failed to serialize task $taskId, not attempting to retry it.", Some(e))
             null
         }
 
@@ -258,11 +260,11 @@ class CoarseGrainedSchedulerBackend(scheduler: TaskSchedulerImpl, val rpcEnv: Rp
           val msg = "Serialized task %s:%d was %d bytes, which exceeds max allowed: " +
             "spark.rpc.message.maxSize (%d bytes). Consider increasing " +
             "spark.rpc.message.maxSize or using broadcast variables for large values."
-          abortTaskSetManager(scheduler, task.taskId,
-            msg.format(task.taskId, task.index, serializedTask.limit, maxRpcMessageSize))
+          abortTaskSetManager(scheduler, taskDescription.taskId,
+            msg.format(taskId, taskDescription.index, serializedTask.limit, maxRpcMessageSize))
         } else if (serializedTask != null) {
           if (serializedTask.limit > TaskSetManager.TASK_SIZE_TO_WARN_KB * 1024) {
-            scheduler.taskIdToTaskSetManager.get(task.taskId).filterNot(_.emittedTaskSizeWarning).
+            scheduler.taskIdToTaskSetManager.get(taskId).filterNot(_.emittedTaskSizeWarning).
               foreach { taskSetMgr =>
                 taskSetMgr.emittedTaskSizeWarning = true
                 val stageId = taskSetMgr.taskSet.stageId
@@ -271,10 +273,10 @@ class CoarseGrainedSchedulerBackend(scheduler: TaskSchedulerImpl, val rpcEnv: Rp
                   s"${TaskSetManager.TASK_SIZE_TO_WARN_KB} KB.")
               }
           }
-          val executorData = executorDataMap(task.executorId)
+          val executorData = executorDataMap(taskDescription.executorId)
           executorData.freeCores -= scheduler.CPUS_PER_TASK
 
-          logDebug(s"Launching task ${task.taskId} on executor id: ${task.executorId} " +
+          logDebug(s"Launching task $taskId on executor id: ${taskDescription.executorId} " +
             s" hostname: ${executorData.executorHost}.")
 
           executorData.executorEndpoint.send(LaunchTask(new SerializableBuffer(serializedTask)))

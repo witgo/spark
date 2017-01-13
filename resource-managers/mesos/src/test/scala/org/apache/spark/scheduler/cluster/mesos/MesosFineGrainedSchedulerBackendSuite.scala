@@ -257,7 +257,8 @@ class MesosFineGrainedSchedulerBackendSuite
       addedJars = mutable.Map.empty[String, Long],
       properties = new Properties(),
       ByteBuffer.wrap(new Array[Byte](0)))
-    when(taskScheduler.resourceOffers(expectedWorkerOffers)).thenReturn(Seq(Seq(taskDesc)))
+    when(taskScheduler.resourceOffers(expectedWorkerOffers).map(_.map(_._1))).
+      thenReturn(Seq(Seq(taskDesc)))
     when(taskScheduler.CPUS_PER_TASK).thenReturn(2)
 
     val capture = ArgumentCaptor.forClass(classOf[Collection[TaskInfo]])
@@ -365,7 +366,8 @@ class MesosFineGrainedSchedulerBackendSuite
       addedJars = mutable.Map.empty[String, Long],
       properties = new Properties(),
       ByteBuffer.wrap(new Array[Byte](0)))
-    when(taskScheduler.resourceOffers(expectedWorkerOffers)).thenReturn(Seq(Seq(taskDesc)))
+    when(taskScheduler.resourceOffers(expectedWorkerOffers).map(_.map(_._1))).
+      thenReturn(Seq(Seq(taskDesc)))
     when(taskScheduler.CPUS_PER_TASK).thenReturn(1)
 
     val capture = ArgumentCaptor.forClass(classOf[Collection[TaskInfo]])
