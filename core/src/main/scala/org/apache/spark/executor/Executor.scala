@@ -148,8 +148,11 @@ private[spark] class Executor(
 
   startDriverHeartbeater()
 
-  def launchTask(context: ExecutorBackend, taskDescription: TaskDescription): Unit = {
-    val tr = new TaskRunner(context, taskDescription)
+  def launchTask(
+      context: ExecutorBackend,
+      taskDescription: TaskDescription,
+      serializedTask: ByteBuffer): Unit = {
+    val tr = new TaskRunner(context, taskDescription, serializedTask)
     runningTasks.put(taskDescription.taskId, tr)
     threadPool.execute(tr)
   }
@@ -206,7 +209,8 @@ private[spark] class Executor(
 
   class TaskRunner(
       execBackend: ExecutorBackend,
-      private val taskDescription: TaskDescription)
+      private val taskDescription: TaskDescription,
+      private val serializedTask: ByteBuffer)
     extends Runnable {
 
     val taskId = taskDescription.taskId
@@ -285,7 +289,7 @@ private[spark] class Executor(
         Executor.taskDeserializationProps.set(taskDescription.properties)
 
         updateDependencies(taskDescription.addedFiles, taskDescription.addedJars)
-        task = Utils.deserialize(taskDescription.serializedTask,
+        task = Utils.deserialize(serializedTask,
           Thread.currentThread.getContextClassLoader).asInstanceOf[Task[Any]]
         task.localProperties = taskDescription.properties
         task.setTaskMemoryManager(taskMemoryManager)

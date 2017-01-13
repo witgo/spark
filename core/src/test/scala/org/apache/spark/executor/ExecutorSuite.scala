@@ -63,8 +63,7 @@ class ExecutorSuite extends SparkFunSuite {
       index = 0,
       addedFiles = Map[String, Long](),
       addedJars = Map[String, Long](),
-      properties = new Properties,
-      serializedTask)
+      properties = new Properties)
 
     // we use latches to force the program to run in this order:
     // +-----------------------------+---------------------------------------+
@@ -114,7 +113,7 @@ class ExecutorSuite extends SparkFunSuite {
     try {
       executor = new Executor("id", "localhost", mockEnv, userClassPath = Nil, isLocal = true)
       // the task will be launched in a dedicated worker thread
-      executor.launchTask(mockExecutorBackend, taskDescription)
+      executor.launchTask(mockExecutorBackend, taskDescription, serializedTask)
 
       executorSuiteHelper.latch1.await()
       // we know the task will be started, but not yet deserialized, because of the latches we
