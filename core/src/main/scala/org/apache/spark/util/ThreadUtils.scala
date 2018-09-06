@@ -20,7 +20,7 @@ package org.apache.spark.util
 import java.util.concurrent._
 
 import scala.concurrent.{Awaitable, ExecutionContext, ExecutionContextExecutor}
-import scala.concurrent.duration.Duration
+import scala.concurrent.duration.{Duration, FiniteDuration}
 import scala.concurrent.forkjoin.{ForkJoinPool => SForkJoinPool, ForkJoinWorkerThread => SForkJoinWorkerThread}
 import scala.util.control.NonFatal
 
@@ -97,6 +97,22 @@ private[spark] object ThreadUtils {
   def newDaemonSingleThreadScheduledExecutor(threadName: String): ScheduledExecutorService = {
     val threadFactory = new ThreadFactoryBuilder().setDaemon(true).setNameFormat(threadName).build()
     val executor = new ScheduledThreadPoolExecutor(1, threadFactory)
+    // By default, a cancelled task is not automatically removed from the work queue until its delay
+    // elapses. We have to enable it manually.
+    executor.setRemoveOnCancelPolicy(true)
+    executor
+  }
+
+  /**
+   * Wrapper over ScheduledThreadPoolExecutor.
+   */
+  def newDaemonThreadPoolScheduledExecutor(threadNamePrefix: String, numThreads: Int)
+  : ScheduledExecutorService = {
+    val threadFactory = new ThreadFactoryBuilder()
+      .setDaemon(true)
+      .setNameFormat(s"$threadNamePrefix-%d")
+      .build()
+    val executor = new ScheduledThreadPoolExecutor(numThreads, threadFactory)
     // By default, a cancelled task is not automatically removed from the work queue until its delay
     // elapses. We have to enable it manually.
     executor.setRemoveOnCancelPolicy(true)
@@ -227,4 +243,14 @@ private[spark] object ThreadUtils {
     }
   }
   // scalastyle:on awaitready
+
+  def shutdown(
+    executor: ExecutorService,
+    gracePeriod: Duration = FiniteDuration(30, TimeUnit.SECONDS)): Unit = {
+    executor.shutdown()
+    executor.awaitTermination(gracePeriod.toMillis, TimeUnit.MILLISECONDS)
+    if (!executor.isShutdown) {
+      executor.shutdownNow()
+    }
+  }
 }
