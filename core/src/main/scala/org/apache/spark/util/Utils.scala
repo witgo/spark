@@ -2810,6 +2810,14 @@ private[spark] object Utils extends Logging {
     s"k8s://$resolvedURL"
   }
 
+  /**
+   * Replaces all the {{EXECUTOR_ID}} occurrences with the Executor Id
+   * and {{APP_ID}} occurrences with the App Id.
+   */
+  def substituteAppNExecIds(opt: String, appId: String, execId: String): String = {
+    opt.replace("{{APP_ID}}", appId).replace("{{EXECUTOR_ID}}", execId)
+  }
+
   def createSecret(conf: SparkConf): String = {
     val bits = conf.get(AUTH_SECRET_BIT_LENGTH)
     val rnd = new SecureRandom()
