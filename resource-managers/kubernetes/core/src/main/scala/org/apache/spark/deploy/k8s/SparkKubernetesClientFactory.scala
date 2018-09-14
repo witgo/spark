@@ -22,10 +22,12 @@ import com.google.common.base.Charsets
 import com.google.common.io.Files
 import io.fabric8.kubernetes.client.{ConfigBuilder, DefaultKubernetesClient, KubernetesClient}
 import io.fabric8.kubernetes.client.utils.HttpClientUtils
-import okhttp3.Dispatcher
+import okhttp3.{Dispatcher, Interceptor, Response}
+import okhttp3.logging.HttpLoggingInterceptor
 
 import org.apache.spark.SparkConf
 import org.apache.spark.deploy.k8s.Config._
+import org.apache.spark.internal.Logging
 import org.apache.spark.util.ThreadUtils
 
 /**
@@ -33,7 +35,7 @@ import org.apache.spark.util.ThreadUtils
  * parse configuration keys, similar to the manner in which Spark's SecurityManager parses SSL
  * options for different components.
  */
-private[spark] object SparkKubernetesClientFactory {
+private[spark] object SparkKubernetesClientFactory extends Logging {
 
   def createKubernetesClient(
       master: String,
@@ -64,6 +66,7 @@ private[spark] object SparkKubernetesClientFactory {
     val dispatcher = new Dispatcher(
       ThreadUtils.newDaemonCachedThreadPool("kubernetes-dispatcher"))
     val config = new ConfigBuilder()
+      .withWebsocketTimeout(120L * 1000)
       .withApiVersion("v1")
       .withMasterUrl(master)
       .withWebsocketPingInterval(0)
@@ -84,6 +87,24 @@ private[spark] object SparkKubernetesClientFactory {
     val baseHttpClient = HttpClientUtils.createHttpClient(config)
     val httpClientWithCustomDispatcher = baseHttpClient.newBuilder()
       .dispatcher(dispatcher)
+      .addInterceptor(new Interceptor() {
+        override def intercept(chain: Interceptor.Chain): Response = {
+          val token = config.getOauthToken()
+          val request = chain.request()
+          if (token != null && token.nonEmpty) {
+            val authReq = request.newBuilder().addHeader("X-Auth-Token", token).build()
+            return chain.proceed(authReq)
+          } else {
+            return chain.proceed(request)
+          }
+        }
+      })
+      .addNetworkInterceptor(new HttpLoggingInterceptor(
+        new HttpLoggingInterceptor.Logger {
+          override def log(message: String): Unit = {
+            logDebug(message)
+          }
+        }))
       .build()
     new DefaultKubernetesClient(httpClientWithCustomDispatcher, config)
   }
