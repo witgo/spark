@@ -17,12 +17,13 @@
 package org.apache.spark.deploy.k8s
 
 import java.io.File
+import java.util.concurrent.TimeUnit
 
 import com.google.common.base.Charsets
 import com.google.common.io.Files
 import io.fabric8.kubernetes.client.{ConfigBuilder, DefaultKubernetesClient, KubernetesClient}
 import io.fabric8.kubernetes.client.utils.HttpClientUtils
-import okhttp3.Dispatcher
+import okhttp3.{Dispatcher, Interceptor, Response}
 
 import org.apache.spark.SparkConf
 import org.apache.spark.deploy.k8s.Config._
@@ -66,7 +67,8 @@ private[spark] object SparkKubernetesClientFactory {
     val config = new ConfigBuilder()
       .withApiVersion("v1")
       .withMasterUrl(master)
-      .withWebsocketPingInterval(0)
+      .withWebsocketTimeout(120L * 1000)
+      .withWebsocketPingInterval(5L * 1000)
       .withOption(oauthTokenValue) {
         (token, configBuilder) => configBuilder.withOauthToken(token)
       }.withOption(oauthTokenFile) {
@@ -84,6 +86,19 @@ private[spark] object SparkKubernetesClientFactory {
     val baseHttpClient = HttpClientUtils.createHttpClient(config)
     val httpClientWithCustomDispatcher = baseHttpClient.newBuilder()
       .dispatcher(dispatcher)
+      .addInterceptor(new Interceptor() {
+        override def intercept(chain: Interceptor.Chain): Response = {
+          val token = config.getOauthToken()
+          val request = chain.request()
+          if (token != null && token.nonEmpty) {
+            val authReq = request.newBuilder().addHeader("X-Auth-Token", token).build()
+            return chain.proceed(authReq)
+          } else {
+            return chain.proceed(request)
+          }
+        }
+      })
+      .writeTimeout(120L, TimeUnit.SECONDS)
       .build()
     new DefaultKubernetesClient(httpClientWithCustomDispatcher, config)
   }
