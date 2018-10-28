@@ -185,12 +185,30 @@ private[spark] class Client(
     val propertiesWriter = new StringWriter()
     properties.store(propertiesWriter,
       s"Java properties built from Kubernetes config map with name: $configMapName")
-    new ConfigMapBuilder()
+   val configMapBuilder = new ConfigMapBuilder()
       .withNewMetadata()
         .withName(configMapName)
         .endMetadata()
-      .addToData(SPARK_CONF_FILE_NAME, propertiesWriter.toString)
-      .build()
+
+    import java.io.File
+    import java.nio.charset.Charset
+    import scala.collection.JavaConverters._
+    import com.google.common.io.Files
+
+    kubernetesConf
+      .sparkConf
+      .getOption("spark.kubernetes.cci.configMap.innerFiles")
+      .foreach(_.split(",").map(new File(_)).filter(_.isFile).foreach { file =>
+        if (file.isFile) {
+          val lines = Files.readLines(file, Charset.forName("UTF-8"))
+          val sb = new StringBuffer()
+          lines.asScala.foreach(line => sb.append(s"$line\n"))
+          configMapBuilder.addToData(file.getName, sb.toString)
+        } else {
+          logWarning(s"Configuration item specified file($file) does not exist.")
+        }
+      })
+    configMapBuilder.addToData(SPARK_CONF_FILE_NAME, propertiesWriter.toString).build()
   }
 }
 

@@ -18,9 +18,11 @@ package org.apache.spark.deploy.k8s.features
 
 import java.util.UUID
 
-import io.fabric8.kubernetes.api.model.{ContainerBuilder, HasMetadata, PersistentVolumeClaimBuilder, PersistentVolumeClaimVolumeSource, PodBuilder, Quantity, ResourceRequirementsBuilder, VolumeBuilder, VolumeMountBuilder}
+import scala.collection.JavaConverters._
 
-import org.apache.spark.deploy.k8s.{KubernetesConf, KubernetesDriverSpecificConf, KubernetesExecutorSpecificConf, KubernetesRoleSpecificConf, SparkPod}
+import io.fabric8.kubernetes.api.model._
+
+import org.apache.spark.deploy.k8s._
 
 private[spark] class EvsDirsFeatureStep(
   conf: KubernetesConf[_ <: KubernetesRoleSpecificConf],
@@ -40,6 +42,8 @@ private[spark] class EvsDirsFeatureStep(
     conf.sparkConf.get("spark.kubernetes.cci.local.dir.storageClass", "ssd")
   private val quota =
     conf.sparkConf.get("spark.kubernetes.cci.local.dir.quota", "10Gi")
+  private val customLabels = KubernetesUtils.parsePrefixedKeyValuePairs(
+    conf.sparkConf, "spark.kubernetes.cci.local.dir.label.")
 
   def resourcesNamePrefix(index: Int): String = {
     conf.roleSpecificConf match {
@@ -99,13 +103,15 @@ private[spark] class EvsDirsFeatureStep(
           .withName(resourcesNamePrefix(index))
           .addToAnnotations(storageClassKey, storageClass)
           .addToAnnotations(storageProvisioner, "flexvolume-huawei.com/fuxivol")
+          .addToLabels(customLabels.asJava)
           .endMetadata()
           .withNewSpec()
           .addToAccessModes("ReadWriteOnce")
           .editOrNewResources()
           .addToRequests("storage", new Quantity(quota))
           .endResources()
-          .endSpec().build()
+          .endSpec()
+          .build()
       }
     localDirVolumes
   }

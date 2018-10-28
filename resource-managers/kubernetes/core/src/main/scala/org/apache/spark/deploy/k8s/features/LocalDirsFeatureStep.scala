@@ -29,7 +29,7 @@ private[spark] class LocalDirsFeatureStep(
   extends KubernetesFeatureConfigStep {
 
   val featureStep =
-    if (conf.sparkConf.getBoolean("spark.kubernetes.cci.enabled", false)) {
+    if (conf.sparkConf.getBoolean("spark.kubernetes.cci.local.dir.evs.enabled", false)) {
       new EvsDirsFeatureStep(conf, defaultLocalDir)
     } else {
       new OriginalLocalDirsFeatureStep(conf, defaultLocalDir)
