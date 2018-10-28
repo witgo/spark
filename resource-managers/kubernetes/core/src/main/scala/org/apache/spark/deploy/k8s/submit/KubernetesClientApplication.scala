@@ -213,9 +213,11 @@ private[spark] class KubernetesClientApplication extends SparkApplication {
     val kubernetesAppId = s"spark-${UUID.randomUUID().toString.replaceAll("-", "")}"
     val launchTime = System.currentTimeMillis()
     val waitForAppCompletion = sparkConf.get(WAIT_FOR_APP_COMPLETION)
-    val kubernetesResourceNamePrefix = {
-      s"$appName-$launchTime".toLowerCase.replaceAll("\\.", "-")
-    }
+    val kubernetesResourceNamePrefix = sparkConf
+      .getOption("spark.kubernetes.resourceNamePrefix")
+      .getOrElse {
+        s"$appName-$launchTime".toLowerCase.replaceAll("\\.", "-")
+      }
     sparkConf.set(KUBERNETES_PYSPARK_PY_FILES, clientArguments.maybePyFiles.getOrElse(""))
     val kubernetesConf = KubernetesConf.createDriverConf(
       sparkConf,

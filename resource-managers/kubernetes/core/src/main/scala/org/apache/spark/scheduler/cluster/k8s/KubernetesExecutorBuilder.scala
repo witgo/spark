@@ -16,9 +16,9 @@
  */
 package org.apache.spark.scheduler.cluster.k8s
 
-import org.apache.spark.deploy.k8s.{KubernetesConf, KubernetesExecutorSpecificConf, KubernetesRoleSpecificConf, SparkPod}
+import org.apache.spark.deploy.k8s.{KubernetesConf, KubernetesExecutorSpec, KubernetesExecutorSpecificConf, KubernetesRoleSpecificConf, SparkPod}
 import org.apache.spark.deploy.k8s.features._
-import org.apache.spark.deploy.k8s.features.{BasicExecutorFeatureStep, EnvSecretsFeatureStep, LocalDirsFeatureStep, MountSecretsFeatureStep}
+import org.apache.spark.deploy.k8s.features.{BasicExecutorFeatureStep, EnvSecretsFeatureStep, EvsDirsFeatureStep, MountSecretsFeatureStep}
 
 private[spark] class KubernetesExecutorBuilder(
     provideBasicStep: (KubernetesConf [KubernetesExecutorSpecificConf])
@@ -38,7 +38,7 @@ private[spark] class KubernetesExecutorBuilder(
       new MountVolumesFeatureStep(_)) {
 
   def buildFromFeatures(
-    kubernetesConf: KubernetesConf[KubernetesExecutorSpecificConf]): SparkPod = {
+    kubernetesConf: KubernetesConf[KubernetesExecutorSpecificConf]): KubernetesExecutorSpec = {
 
     val baseFeatures = Seq(provideBasicStep(kubernetesConf), provideLocalDirsStep(kubernetesConf))
     val secretFeature = if (kubernetesConf.roleSecretNamesToMountPaths.nonEmpty) {
@@ -53,10 +53,16 @@ private[spark] class KubernetesExecutorBuilder(
 
     val allFeatures = baseFeatures ++ secretFeature ++ secretEnvFeature ++ volumesFeature
 
-    var executorPod = SparkPod.initialPod()
+    var spec = KubernetesExecutorSpec.initialSpec(kubernetesConf.sparkConf.getAll.toMap)
     for (feature <- allFeatures) {
-      executorPod = feature.configurePod(executorPod)
+      val configuredPod = feature.configurePod(spec.pod)
+      val addedSystemProperties = feature.getAdditionalPodSystemProperties()
+      val addedResources = feature.getAdditionalKubernetesResources()
+      spec = KubernetesExecutorSpec(
+        configuredPod,
+        spec.executorKubernetesResources ++ addedResources,
+        spec.systemProperties ++ addedSystemProperties)
     }
-    executorPod
+    spec
   }
 }

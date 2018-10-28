@@ -92,6 +92,13 @@ private[spark] object KubernetesVolumeUtils {
         val sizeLimitKey = s"$volumeType.$volumeName.$KUBERNETES_VOLUMES_OPTIONS_SIZE_LIMIT_KEY"
         Success(KubernetesEmptyDirVolumeConf(options.get(mediumKey), options.get(sizeLimitKey)))
 
+      case KUBERNETES_VOLUMES_CONFIGMAP_TYPE =>
+        val configMapNameKey =
+          s"$volumeType.$volumeName.$KUBERNETES_VOLUMES_OPTIONS_CONFIGMAP_NAME_KEY"
+        for {
+          configMapName <- options.getTry(configMapNameKey)
+        } yield KubernetesConfigMapVolumeConf(configMapName)
+
       case _ =>
         Failure(new RuntimeException(s"Kubernetes Volume type `$volumeType` is not supported"))
     }

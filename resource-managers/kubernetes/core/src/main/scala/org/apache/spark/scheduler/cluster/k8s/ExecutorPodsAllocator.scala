@@ -16,9 +16,10 @@
  */
 package org.apache.spark.scheduler.cluster.k8s
 
+import java.util.Collections
 import java.util.concurrent.atomic.{AtomicInteger, AtomicLong}
 
-import io.fabric8.kubernetes.api.model.PodBuilder
+import io.fabric8.kubernetes.api.model.{HasMetadata, OwnerReferenceBuilder, Pod, PodBuilder}
 import io.fabric8.kubernetes.client.KubernetesClient
 import scala.collection.mutable
 
@@ -128,13 +129,16 @@ private[spark] class ExecutorPodsAllocator(
             newExecutorId.toString,
             applicationId,
             driverPod)
-          val executorPod = executorBuilder.buildFromFeatures(executorConf)
-          val podWithAttachedContainer = new PodBuilder(executorPod.pod)
+          val resolvedExecutorSpec = executorBuilder.buildFromFeatures(executorConf)
+          val podWithAttachedContainer = new PodBuilder(resolvedExecutorSpec.pod.pod)
             .editOrNewSpec()
-            .addToContainers(executorPod.container)
+            .addToContainers(resolvedExecutorSpec.pod.container)
             .endSpec()
             .build()
-          kubernetesClient.pods().create(podWithAttachedContainer)
+          val createdPod = kubernetesClient.pods().create(podWithAttachedContainer)
+          val otherKubernetesResources = resolvedExecutorSpec.executorKubernetesResources
+          addOwnerReference(createdPod, otherKubernetesResources)
+          kubernetesClient.resourceList(otherKubernetesResources: _*).createOrReplace()
           newlyCreatedExecutors(newExecutorId) = clock.getTimeMillis()
           logDebug(s"Requested executor with id $newExecutorId from Kubernetes.")
         }
@@ -149,6 +153,22 @@ private[spark] class ExecutorPodsAllocator(
           s" created but we have not observed as being present in the cluster yet:" +
           s" ${newlyCreatedExecutors.size}.")
       }
+    }
+  }
+
+  // Add a OwnerReference to the given resources making the pod an owner of them so when
+  // the pod is deleted, the resources are garbage collected.
+  private def addOwnerReference(pod: Pod, resources: Seq[HasMetadata]): Unit = {
+    val podOwnerReference = new OwnerReferenceBuilder()
+      .withName(pod.getMetadata.getName)
+      .withApiVersion(pod.getApiVersion)
+      .withUid(pod.getMetadata.getUid)
+      .withKind(pod.getKind)
+      .withController(true)
+      .build()
+    resources.foreach { resource =>
+      val originalMetadata = resource.getMetadata
+      originalMetadata.setOwnerReferences(Collections.singletonList(podOwnerReference))
     }
   }
 }
