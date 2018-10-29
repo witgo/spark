@@ -23,7 +23,9 @@ import com.cloud.sdk.http.HttpMethodName
 import okhttp3.{Interceptor, Response}
 import okio.Buffer
 
-class ApiGwInterceptor(ak: String, sk: String) extends Interceptor {
+import org.apache.spark.internal.Logging
+
+class ApiGwInterceptor(ak: String, sk: String) extends Interceptor with Logging {
 
   override def intercept(chain: Interceptor.Chain): Response = {
     val request = chain.request()
@@ -43,6 +45,7 @@ class ApiGwInterceptor(ak: String, sk: String) extends Interceptor {
       null
     }
     val authReq = Client.okhttpRequest(httpMethod, ak, sk, url, headers, body)
+    logDebug(s"Sending: $authReq")
     chain.proceed(authReq)
   }
 }
