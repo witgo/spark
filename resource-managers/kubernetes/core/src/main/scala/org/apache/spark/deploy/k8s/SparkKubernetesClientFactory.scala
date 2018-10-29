@@ -97,10 +97,11 @@ private[spark] object SparkKubernetesClientFactory {
       }.withOption(namespace) {
         (ns, configBuilder) => configBuilder.withNamespace(ns)
       }.build()
-    val baseHttpClient = HttpClientUtils.createHttpClient(config)
 
     websocketTimeout.map(Utils.timeStringAsMs).foreach(config.setWebsocketTimeout)
     websocketPingInterval.map(Utils.timeStringAsMs).foreach(config.setWebsocketPingInterval)
+
+    val baseHttpClient = HttpClientUtils.createHttpClient(config)
 
     val builder = baseHttpClient.newBuilder().dispatcher(dispatcher)
     if (ak.nonEmpty && sk.nonEmpty) {
