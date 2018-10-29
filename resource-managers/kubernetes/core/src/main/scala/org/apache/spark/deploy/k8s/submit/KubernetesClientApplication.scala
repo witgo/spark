@@ -143,7 +143,7 @@ private[spark] class Client(
         val otherKubernetesResources =
           resolvedDriverSpec.driverKubernetesResources ++ Seq(configMap)
         addDriverOwnerReference(createdDriverPod, otherKubernetesResources)
-        kubernetesClient.resourceList(otherKubernetesResources: _*).createOrReplace()
+        createOrReplace(kubernetesConf.sparkConf, otherKubernetesResources)
       } catch {
         case NonFatal(e) =>
           kubernetesClient.pods().delete(createdDriverPod)
@@ -160,6 +160,33 @@ private[spark] class Client(
     }
   }
 
+  private def createOrReplace(
+    sparkConf: SparkConf,
+    resources: Seq[HasMetadata]): Unit = {
+    if (sparkConf.getBoolean("spark.kubernetes.cci.local.dir.evs.gc.enabled", true)) {
+      kubernetesClient.resourceList(resources: _*).createOrReplace()
+    } else {
+      resources
+        .filter(_.isInstanceOf[PersistentVolumeClaim])
+        .map(_.asInstanceOf[PersistentVolumeClaim])
+        .foreach { pcv =>
+          val reloadPvc = kubernetesClient
+            .resource(pcv.asInstanceOf[HasMetadata])
+            .fromServer()
+            .get()
+            .asInstanceOf[PersistentVolumeClaim]
+          if (reloadPvc == null) {
+            kubernetesClient.persistentVolumeClaims().create(pcv)
+          } else if (!reloadPvc.getSpec.getResources.equals(pcv.getSpec.getResources)) {
+            kubernetesClient.persistentVolumeClaims().delete(pcv)
+            kubernetesClient.persistentVolumeClaims().create(pcv)
+          }
+        }
+      val otherKubernetesResources = resources.filter(!_.isInstanceOf[PersistentVolumeClaim])
+      kubernetesClient.resourceList(otherKubernetesResources: _*).createOrReplace()
+    }
+  }
+
   // Add a OwnerReference to the given resources making the driver pod an owner of them so when
   // the driver pod is deleted, the resources are garbage collected.
   private def addDriverOwnerReference(driverPod: Pod, resources: Seq[HasMetadata]): Unit = {
@@ -171,8 +198,12 @@ private[spark] class Client(
       .withController(true)
       .build()
     resources.foreach { resource =>
-      val originalMetadata = resource.getMetadata
-      originalMetadata.setOwnerReferences(Collections.singletonList(driverPodOwnerReference))
+      val evsGc =
+        kubernetesConf.sparkConf.getBoolean("spark.kubernetes.cci.local.dir.evs.gc.enabled", true)
+      if (!(!evsGc && resource.isInstanceOf[PersistentVolumeClaim])) {
+        val originalMetadata = resource.getMetadata
+        originalMetadata.setOwnerReferences(Collections.singletonList(driverPodOwnerReference))
+      }
     }
   }
 

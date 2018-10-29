@@ -19,7 +19,7 @@ package org.apache.spark.scheduler.cluster.k8s
 import java.util.Collections
 import java.util.concurrent.atomic.{AtomicInteger, AtomicLong}
 
-import io.fabric8.kubernetes.api.model.{HasMetadata, OwnerReferenceBuilder, Pod, PodBuilder}
+import io.fabric8.kubernetes.api.model.{HasMetadata, OwnerReferenceBuilder, PersistentVolumeClaim, Pod, PodBuilder}
 import io.fabric8.kubernetes.client.KubernetesClient
 import scala.collection.mutable
 
@@ -138,7 +138,7 @@ private[spark] class ExecutorPodsAllocator(
           val createdPod = kubernetesClient.pods().create(podWithAttachedContainer)
           val otherKubernetesResources = resolvedExecutorSpec.executorKubernetesResources
           addOwnerReference(createdPod, otherKubernetesResources)
-          kubernetesClient.resourceList(otherKubernetesResources: _*).createOrReplace()
+          createOrReplace(conf, otherKubernetesResources)
           newlyCreatedExecutors(newExecutorId) = clock.getTimeMillis()
           logDebug(s"Requested executor with id $newExecutorId from Kubernetes.")
         }
@@ -156,6 +156,33 @@ private[spark] class ExecutorPodsAllocator(
     }
   }
 
+  private def createOrReplace(
+    sparkConf: SparkConf,
+    resources: Seq[HasMetadata]): Unit = {
+    if (sparkConf.getBoolean("spark.kubernetes.cci.local.dir.evs.gc.enabled", true)) {
+      kubernetesClient.resourceList(resources: _*).createOrReplace()
+    } else {
+      resources
+        .filter(_.isInstanceOf[PersistentVolumeClaim])
+        .map(_.asInstanceOf[PersistentVolumeClaim])
+        .foreach { pcv =>
+          val reloadPvc = kubernetesClient
+            .resource(pcv.asInstanceOf[HasMetadata])
+            .fromServer()
+            .get()
+            .asInstanceOf[PersistentVolumeClaim]
+          if (reloadPvc == null) {
+            kubernetesClient.persistentVolumeClaims().create(pcv)
+          } else if (!reloadPvc.getSpec.getResources.equals(pcv.getSpec.getResources)) {
+            kubernetesClient.persistentVolumeClaims().delete(pcv)
+            kubernetesClient.persistentVolumeClaims().create(pcv)
+          }
+        }
+      val otherKubernetesResources = resources.filter(!_.isInstanceOf[PersistentVolumeClaim])
+      kubernetesClient.resourceList(otherKubernetesResources: _*).createOrReplace()
+    }
+  }
+
   // Add a OwnerReference to the given resources making the pod an owner of them so when
   // the pod is deleted, the resources are garbage collected.
   private def addOwnerReference(pod: Pod, resources: Seq[HasMetadata]): Unit = {
@@ -167,8 +194,12 @@ private[spark] class ExecutorPodsAllocator(
       .withController(true)
       .build()
     resources.foreach { resource =>
-      val originalMetadata = resource.getMetadata
-      originalMetadata.setOwnerReferences(Collections.singletonList(podOwnerReference))
+     val evsGc =
+       conf.getBoolean("spark.kubernetes.cci.local.dir.evs.gc.enabled", true)
+      if (!(!evsGc && resource.isInstanceOf[PersistentVolumeClaim])) {
+        val originalMetadata = resource.getMetadata
+        originalMetadata.setOwnerReferences(Collections.singletonList(podOwnerReference))
+      }
     }
   }
 }
