@@ -167,13 +167,15 @@ private[spark] class ExecutorPodsAllocator(
         .map(_.asInstanceOf[PersistentVolumeClaim])
         .foreach { pcv =>
           val reloadPvc = kubernetesClient
-            .resource(pcv.asInstanceOf[HasMetadata])
+            .persistentVolumeClaims()
+            .withName(pcv.getMetadata.getName)
             .fromServer()
             .get()
             .asInstanceOf[PersistentVolumeClaim]
           if (reloadPvc == null) {
             kubernetesClient.persistentVolumeClaims().create(pcv)
-          } else if (!reloadPvc.getSpec.getResources.equals(pcv.getSpec.getResources)) {
+          } else if (!reloadPvc.getSpec.getResources.getRequests
+            .equals(pcv.getSpec.getResources.getRequests)) {
             kubernetesClient.persistentVolumeClaims().delete(pcv)
             kubernetesClient.persistentVolumeClaims().create(pcv)
           }
