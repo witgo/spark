@@ -57,7 +57,7 @@ private[spark] class MountVolumesFeatureStep(
       val volumeBuilder = spec.volumeConf match {
         case KubernetesHostPathVolumeConf(hostPath) =>
           new VolumeBuilder()
-            .withHostPath(new HostPathVolumeSource(hostPath))
+            .withHostPath(new HostPathVolumeSource(hostPath, ""))
 
         case KubernetesPVCVolumeConf(claimName) =>
           new VolumeBuilder()
