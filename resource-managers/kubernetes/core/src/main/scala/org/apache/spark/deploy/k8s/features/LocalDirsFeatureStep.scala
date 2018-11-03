@@ -37,9 +37,9 @@ private[spark] class LocalDirsFeatureStep(
 
   def configurePod(pod: SparkPod): SparkPod = featureStep.configurePod(pod)
 
-  def getAdditionalPodSystemProperties(): Map[String, String] =
+  override def getAdditionalPodSystemProperties(): Map[String, String] =
     featureStep.getAdditionalPodSystemProperties()
 
-  def getAdditionalKubernetesResources(): Seq[HasMetadata] =
+  override def getAdditionalKubernetesResources(): Seq[HasMetadata] =
     featureStep.getAdditionalKubernetesResources()
 }
