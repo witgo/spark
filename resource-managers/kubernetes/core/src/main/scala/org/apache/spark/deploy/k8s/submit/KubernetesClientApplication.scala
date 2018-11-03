@@ -147,7 +147,7 @@ private[spark] class Client(
         val otherKubernetesResources =
           resolvedDriverSpec.driverKubernetesResources ++ Seq(configMap)
         addDriverOwnerReference(createdDriverPod, otherKubernetesResources)
-        kubernetesClient.resourceList(otherKubernetesResources: _*).createOrReplace()
+        createOrReplace(kubernetesConf.sparkConf, otherKubernetesResources)
       } catch {
         case NonFatal(e) =>
           kubernetesClient.pods().delete(createdDriverPod)
@@ -164,6 +164,35 @@ private[spark] class Client(
     }
   }
 
+  private def createOrReplace(
+    sparkConf: SparkConf,
+    resources: Seq[HasMetadata]): Unit = {
+    if (sparkConf.getBoolean("spark.kubernetes.cci.local.dir.evs.gc.enabled", true)) {
+      kubernetesClient.resourceList(resources: _*).createOrReplace()
+    } else {
+      resources
+        .filter(_.isInstanceOf[PersistentVolumeClaim])
+        .map(_.asInstanceOf[PersistentVolumeClaim])
+        .foreach { pcv =>
+          val reloadPvc = kubernetesClient
+            .persistentVolumeClaims()
+            .withName(pcv.getMetadata.getName)
+            .fromServer()
+            .get()
+            .asInstanceOf[PersistentVolumeClaim]
+          if (reloadPvc == null) {
+            kubernetesClient.persistentVolumeClaims().create(pcv)
+          } else if (!reloadPvc.getSpec.getResources.getRequests
+            .equals(pcv.getSpec.getResources.getRequests)) {
+            kubernetesClient.persistentVolumeClaims().delete(pcv)
+            kubernetesClient.persistentVolumeClaims().create(pcv)
+          }
+        }
+      val otherKubernetesResources = resources.filter(!_.isInstanceOf[PersistentVolumeClaim])
+      kubernetesClient.resourceList(otherKubernetesResources: _*).createOrReplace()
+    }
+  }
+
   // Add a OwnerReference to the given resources making the driver pod an owner of them so when
   // the driver pod is deleted, the resources are garbage collected.
   private def addDriverOwnerReference(driverPod: Pod, resources: Seq[HasMetadata]): Unit = {
@@ -175,8 +204,12 @@ private[spark] class Client(
       .withController(true)
       .build()
     resources.foreach { resource =>
-      val originalMetadata = resource.getMetadata
-      originalMetadata.setOwnerReferences(Collections.singletonList(driverPodOwnerReference))
+      val evsGc =
+        kubernetesConf.sparkConf.getBoolean("spark.kubernetes.cci.local.dir.evs.gc.enabled", true)
+      if (!(!evsGc && resource.isInstanceOf[PersistentVolumeClaim])) {
+        val originalMetadata = resource.getMetadata
+        originalMetadata.setOwnerReferences(Collections.singletonList(driverPodOwnerReference))
+      }
     }
   }
 
@@ -189,12 +222,30 @@ private[spark] class Client(
     val propertiesWriter = new StringWriter()
     properties.store(propertiesWriter,
       s"Java properties built from Kubernetes config map with name: $configMapName")
-    new ConfigMapBuilder()
+   val configMapBuilder = new ConfigMapBuilder()
       .withNewMetadata()
         .withName(configMapName)
         .endMetadata()
-      .addToData(SPARK_CONF_FILE_NAME, propertiesWriter.toString)
-      .build()
+
+    import java.io.File
+    import java.nio.charset.Charset
+    import scala.collection.JavaConverters._
+    import com.google.common.io.Files
+
+    kubernetesConf
+      .sparkConf
+      .getOption("spark.kubernetes.cci.configMap.innerFiles")
+      .foreach(_.split(",").map(new File(_)).filter(_.isFile).foreach { file =>
+        if (file.isFile) {
+          val lines = Files.readLines(file, Charset.forName("UTF-8"))
+          val sb = new StringBuffer()
+          lines.asScala.foreach(line => sb.append(s"$line\n"))
+          configMapBuilder.addToData(file.getName, sb.toString)
+        } else {
+          logWarning(s"Configuration item specified file($file) does not exist.")
+        }
+      })
+    configMapBuilder.addToData(SPARK_CONF_FILE_NAME, propertiesWriter.toString).build()
   }
 }
 
@@ -215,8 +266,13 @@ private[spark] class KubernetesClientApplication extends SparkApplication {
     // considerably restrictive, e.g. must be no longer than 63 characters in length. So we generate
     // a unique app ID (captured by spark.app.id) in the format below.
     val kubernetesAppId = s"spark-${UUID.randomUUID().toString.replaceAll("-", "")}"
+    val launchTime = System.currentTimeMillis()
     val waitForAppCompletion = sparkConf.get(WAIT_FOR_APP_COMPLETION)
-    val kubernetesResourceNamePrefix = KubernetesClientApplication.getResourceNamePrefix(appName)
+    val kubernetesResourceNamePrefix = sparkConf
+      .getOption("spark.kubernetes.resourceNamePrefix")
+      .getOrElse {
+        s"$appName-$launchTime".toLowerCase.replaceAll("\\.", "-")
+      }
     sparkConf.set(KUBERNETES_PYSPARK_PY_FILES, clientArguments.maybePyFiles.getOrElse(""))
     val kubernetesConf = KubernetesConf.createDriverConf(
       sparkConf,
@@ -228,6 +284,7 @@ private[spark] class KubernetesClientApplication extends SparkApplication {
       clientArguments.driverArgs,
       clientArguments.maybePyFiles,
       clientArguments.hadoopConfigDir)
+    val builder = new KubernetesDriverBuilder
     val namespace = kubernetesConf.namespace()
     // The master URL has been checked for validity already in SparkSubmit.
     // We just need to get rid of the "k8s://" prefix here.

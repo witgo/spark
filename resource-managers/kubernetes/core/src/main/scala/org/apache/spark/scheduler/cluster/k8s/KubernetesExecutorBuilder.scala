@@ -56,7 +56,7 @@ private[spark] class KubernetesExecutorBuilder(
     provideInitialPod: () => SparkPod = () => SparkPod.initialPod()) {
 
   def buildFromFeatures(
-    kubernetesConf: KubernetesConf[KubernetesExecutorSpecificConf]): SparkPod = {
+    kubernetesConf: KubernetesConf[KubernetesExecutorSpecificConf]): KubernetesExecutorSpec = {
     val sparkConf = kubernetesConf.sparkConf
     val maybeHadoopConfigMap = sparkConf.getOption(HADOOP_CONFIG_MAP_NAME)
     val maybeDTSecretName = sparkConf.getOption(KERBEROS_DT_SECRET_NAME)
@@ -91,11 +91,20 @@ private[spark] class KubernetesExecutorBuilder(
       volumesFeature ++
       maybeHadoopConfFeatureSteps
 
-    var executorPod = provideInitialPod()
+    var spec = KubernetesExecutorSpec(
+      provideInitialPod(),
+      executorKubernetesResources = Seq.empty,
+      kubernetesConf.sparkConf.getAll.toMap)
     for (feature <- allFeatures) {
-      executorPod = feature.configurePod(executorPod)
+      val configuredPod = feature.configurePod(spec.pod)
+      val addedSystemProperties = feature.getAdditionalPodSystemProperties()
+      val addedResources = feature.getAdditionalKubernetesResources()
+      spec = KubernetesExecutorSpec(
+        configuredPod,
+        spec.executorKubernetesResources ++ addedResources,
+        spec.systemProperties ++ addedSystemProperties)
     }
-    executorPod
+    spec
   }
 }
 

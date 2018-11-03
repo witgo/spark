@@ -78,7 +78,7 @@ class KubernetesExecutorBuilderSuite extends SparkFunSuite {
       Nil,
       None)
     validateStepTypesApplied(
-      builderUnderTest.buildFromFeatures(conf), BASIC_STEP_TYPE, LOCAL_DIRS_STEP_TYPE)
+      builderUnderTest.buildFromFeatures(conf).pod, BASIC_STEP_TYPE, LOCAL_DIRS_STEP_TYPE)
   }
 
   test("Apply secrets step if secrets are present.") {
@@ -96,7 +96,7 @@ class KubernetesExecutorBuilderSuite extends SparkFunSuite {
       Nil,
       None)
     validateStepTypesApplied(
-      builderUnderTest.buildFromFeatures(conf),
+      builderUnderTest.buildFromFeatures(conf).pod,
       BASIC_STEP_TYPE,
       LOCAL_DIRS_STEP_TYPE,
       SECRETS_STEP_TYPE,
@@ -124,7 +124,7 @@ class KubernetesExecutorBuilderSuite extends SparkFunSuite {
       volumeSpec :: Nil,
       None)
     validateStepTypesApplied(
-      builderUnderTest.buildFromFeatures(conf),
+      builderUnderTest.buildFromFeatures(conf).pod,
       BASIC_STEP_TYPE,
       LOCAL_DIRS_STEP_TYPE,
       MOUNT_VOLUMES_STEP_TYPE)
@@ -152,7 +152,7 @@ class KubernetesExecutorBuilderSuite extends SparkFunSuite {
       Nil,
       Some(HadoopConfSpec(Some("/var/hadoop-conf"), None)))
     validateStepTypesApplied(
-      builderUnderTest.buildFromFeatures(conf),
+      builderUnderTest.buildFromFeatures(conf).pod,
       BASIC_STEP_TYPE,
       LOCAL_DIRS_STEP_TYPE,
       HADOOP_CONF_STEP_TYPE,
@@ -179,7 +179,7 @@ class KubernetesExecutorBuilderSuite extends SparkFunSuite {
       Nil,
       Some(HadoopConfSpec(None, Some("pre-defined-onfigMapName"))))
     validateStepTypesApplied(
-      builderUnderTest.buildFromFeatures(conf),
+      builderUnderTest.buildFromFeatures(conf).pod,
       BASIC_STEP_TYPE,
       LOCAL_DIRS_STEP_TYPE,
       HADOOP_CONF_STEP_TYPE,
@@ -224,7 +224,7 @@ class KubernetesExecutorBuilderSuite extends SparkFunSuite {
       Option.empty)
     val sparkPod = KubernetesExecutorBuilder
       .apply(kubernetesClient, sparkConf)
-      .buildFromFeatures(kubernetesConf)
+      .buildFromFeatures(kubernetesConf).pod
     PodBuilderSuiteUtils.verifyPodWithSupportedFeatures(sparkPod)
   }
 }

@@ -16,28 +16,9 @@
  */
 package org.apache.spark.deploy.k8s
 
-private[spark] sealed trait KubernetesVolumeSpecificConf
+import io.fabric8.kubernetes.api.model.HasMetadata
 
-private[spark] case class KubernetesConfigMapVolumeConf(
-    configMapName: String)
-  extends KubernetesVolumeSpecificConf
-
-private[spark] case class KubernetesHostPathVolumeConf(
-    hostPath: String)
-  extends KubernetesVolumeSpecificConf
-
-private[spark] case class KubernetesPVCVolumeConf(
-    claimName: String)
-  extends KubernetesVolumeSpecificConf
-
-private[spark] case class KubernetesEmptyDirVolumeConf(
-    medium: Option[String],
-    sizeLimit: Option[String])
-  extends KubernetesVolumeSpecificConf
-
-private[spark] case class KubernetesVolumeSpec[T <: KubernetesVolumeSpecificConf](
-    volumeName: String,
-    mountPath: String,
-    mountSubPath: String,
-    mountReadOnly: Boolean,
-    volumeConf: T)
+private[spark] case class KubernetesExecutorSpec(
+  pod: SparkPod,
+  executorKubernetesResources: Seq[HasMetadata],
+  systemProperties: Map[String, String])

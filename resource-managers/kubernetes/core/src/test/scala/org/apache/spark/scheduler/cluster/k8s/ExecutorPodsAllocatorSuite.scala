@@ -79,7 +79,7 @@ class ExecutorPodsAllocatorSuite extends SparkFunSuite with BeforeAndAfter {
     when(kubernetesClient.pods()).thenReturn(podOperations)
     when(podOperations.withName(driverPodName)).thenReturn(driverPodOperations)
     when(driverPodOperations.get).thenReturn(driverPod)
-    when(executorBuilder.buildFromFeatures(kubernetesConfWithCorrectFields()))
+    when(executorBuilder.buildFromFeatures(kubernetesConfWithCorrectFields()).pod)
       .thenAnswer(executorPodAnswer())
     snapshotsStore = new DeterministicExecutorPodsSnapshotsStore()
     waitForExecutorPodsClock = new ManualClock(0L)
