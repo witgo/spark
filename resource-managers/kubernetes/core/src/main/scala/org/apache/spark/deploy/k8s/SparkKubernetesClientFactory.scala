@@ -17,6 +17,7 @@
 package org.apache.spark.deploy.k8s
 
 import java.io.File
+import java.util.concurrent.TimeUnit
 
 import com.google.common.base.Charsets
 import com.google.common.io.Files
@@ -26,7 +27,8 @@ import okhttp3.Dispatcher
 
 import org.apache.spark.SparkConf
 import org.apache.spark.deploy.k8s.Config._
-import org.apache.spark.util.ThreadUtils
+import org.apache.spark.deploy.k8s.cci.{ApiGwInterceptor, TokenInterceptor}
+import org.apache.spark.util.{ThreadUtils, Utils}
 
 /**
  * Spark-opinionated builder for Kubernetes clients. It uses a prefix plus common suffixes to
@@ -44,6 +46,20 @@ private[spark] object SparkKubernetesClientFactory {
       defaultServiceAccountCaCert: Option[File]): KubernetesClient = {
 
     // TODO [SPARK-25887] Support configurable context
+
+    val websocketTimeout =
+      sparkConf.getOption(s"$kubernetesAuthConfPrefix.websocketTimeout")
+    val websocketPingInterval =
+      sparkConf.getOption(s"$kubernetesAuthConfPrefix.websocketPingInterval")
+    val connectTimeout =
+      sparkConf.getOption(s"$kubernetesAuthConfPrefix.connectTimeout")
+    val readTimeout =
+      sparkConf.getOption(s"$kubernetesAuthConfPrefix.readTimeout")
+    val writeTimeout =
+      sparkConf.getOption(s"$kubernetesAuthConfPrefix.writeTimeout")
+    val ak = sparkConf.getOption(s"$kubernetesAuthConfPrefix.cci.accessKey")
+    val sk = sparkConf.getOption(s"$kubernetesAuthConfPrefix.cci.secretKey")
+    val token = sparkConf.getOption(s"$kubernetesAuthConfPrefix.cci.token")
 
     val oauthTokenFileConf = s"$kubernetesAuthConfPrefix.$OAUTH_TOKEN_FILE_CONF_SUFFIX"
     val oauthTokenConf = s"$kubernetesAuthConfPrefix.$OAUTH_TOKEN_CONF_SUFFIX"
@@ -86,10 +102,27 @@ private[spark] object SparkKubernetesClientFactory {
       }.withOption(namespace) {
         (ns, configBuilder) => configBuilder.withNamespace(ns)
       }.build()
+
+    websocketTimeout.map(Utils.timeStringAsMs).foreach(config.setWebsocketTimeout)
+    websocketPingInterval.map(Utils.timeStringAsMs).foreach(config.setWebsocketPingInterval)
+
     val baseHttpClient = HttpClientUtils.createHttpClient(config)
-    val httpClientWithCustomDispatcher = baseHttpClient.newBuilder()
-      .dispatcher(dispatcher)
-      .build()
+
+    val builder = baseHttpClient.newBuilder().dispatcher(dispatcher)
+    if (ak.nonEmpty && sk.nonEmpty) {
+      builder.addInterceptor(new ApiGwInterceptor(ak.get, sk.get))
+    } else if (token.nonEmpty) {
+      builder.addInterceptor(new TokenInterceptor(token.get))
+    }
+
+    connectTimeout.map(Utils.timeStringAsMs)
+      .foreach(builder.connectTimeout(_, TimeUnit.MILLISECONDS))
+    readTimeout.map(Utils.timeStringAsMs)
+      .foreach(builder.readTimeout(_, TimeUnit.MILLISECONDS))
+    writeTimeout.map(Utils.timeStringAsMs)
+      .foreach(builder.writeTimeout(_, TimeUnit.MILLISECONDS))
+
+    val httpClientWithCustomDispatcher = builder.build()
     new DefaultKubernetesClient(httpClientWithCustomDispatcher, config)
   }
 

@@ -106,7 +106,7 @@ private[spark] class Client(
   def run(): Unit = {
     val resolvedDriverSpec = builder.buildFromFeatures(conf)
     val configMapName = s"${conf.resourceNamePrefix}-driver-conf-map"
-    val configMap = buildConfigMap(configMapName, resolvedDriverSpec.systemProperties)
+    val configMap = buildConfigMap(conf, configMapName, resolvedDriverSpec.systemProperties)
     // The include of the ENV_VAR for "SPARK_CONF_DIR" is to allow for the
     // Spark command builder to pickup on the Java Options present in the ConfigMap
     val resolvedDriverContainer = new ContainerBuilder(resolvedDriverSpec.pod.container)
@@ -140,7 +140,7 @@ private[spark] class Client(
         val otherKubernetesResources =
           resolvedDriverSpec.driverKubernetesResources ++ Seq(configMap)
         addDriverOwnerReference(createdDriverPod, otherKubernetesResources)
-        kubernetesClient.resourceList(otherKubernetesResources: _*).createOrReplace()
+        createOrReplace(conf.sparkConf, otherKubernetesResources)
       } catch {
         case NonFatal(e) =>
           kubernetesClient.pods().delete(createdDriverPod)
@@ -157,6 +157,35 @@ private[spark] class Client(
     }
   }
 
+  private def createOrReplace(
+    sparkConf: SparkConf,
+    resources: Seq[HasMetadata]): Unit = {
+    if (sparkConf.getBoolean("spark.kubernetes.cci.local.dir.evs.gc.enabled", true)) {
+      kubernetesClient.resourceList(resources: _*).createOrReplace()
+    } else {
+      resources
+        .filter(_.isInstanceOf[PersistentVolumeClaim])
+        .map(_.asInstanceOf[PersistentVolumeClaim])
+        .foreach { pcv =>
+          val reloadPvc = kubernetesClient
+            .persistentVolumeClaims()
+            .withName(pcv.getMetadata.getName)
+            .fromServer()
+            .get()
+            .asInstanceOf[PersistentVolumeClaim]
+          if (reloadPvc == null) {
+            kubernetesClient.persistentVolumeClaims().create(pcv)
+          } else if (!reloadPvc.getSpec.getResources.getRequests
+            .equals(pcv.getSpec.getResources.getRequests)) {
+            kubernetesClient.persistentVolumeClaims().delete(pcv)
+            kubernetesClient.persistentVolumeClaims().create(pcv)
+          }
+        }
+      val otherKubernetesResources = resources.filter(!_.isInstanceOf[PersistentVolumeClaim])
+      kubernetesClient.resourceList(otherKubernetesResources: _*).createOrReplace()
+    }
+  }
+
   // Add a OwnerReference to the given resources making the driver pod an owner of them so when
   // the driver pod is deleted, the resources are garbage collected.
   private def addDriverOwnerReference(driverPod: Pod, resources: Seq[HasMetadata]): Unit = {
@@ -168,13 +197,20 @@ private[spark] class Client(
       .withController(true)
       .build()
     resources.foreach { resource =>
-      val originalMetadata = resource.getMetadata
-      originalMetadata.setOwnerReferences(Collections.singletonList(driverPodOwnerReference))
+      val evsGc =
+        conf.sparkConf.getBoolean("spark.kubernetes.cci.local.dir.evs.gc.enabled", true)
+      if (!(!evsGc && resource.isInstanceOf[PersistentVolumeClaim])) {
+        val originalMetadata = resource.getMetadata
+        originalMetadata.setOwnerReferences(Collections.singletonList(driverPodOwnerReference))
+      }
     }
   }
 
   // Build a Config Map that will house spark conf properties in a single file for spark-submit
-  private def buildConfigMap(configMapName: String, conf: Map[String, String]): ConfigMap = {
+  private def buildConfigMap(
+    kubernetesConf: KubernetesConf,
+    configMapName: String,
+    conf: Map[String, String]): ConfigMap = {
     val properties = new Properties()
     conf.foreach { case (k, v) =>
       properties.setProperty(k, v)
@@ -182,12 +218,30 @@ private[spark] class Client(
     val propertiesWriter = new StringWriter()
     properties.store(propertiesWriter,
       s"Java properties built from Kubernetes config map with name: $configMapName")
-    new ConfigMapBuilder()
+   val configMapBuilder = new ConfigMapBuilder()
       .withNewMetadata()
         .withName(configMapName)
         .endMetadata()
-      .addToData(SPARK_CONF_FILE_NAME, propertiesWriter.toString)
-      .build()
+
+    import java.io.File
+    import java.nio.charset.Charset
+    import scala.collection.JavaConverters._
+    import com.google.common.io.Files
+
+    kubernetesConf
+      .sparkConf
+      .getOption("spark.kubernetes.cci.configMap.innerFiles")
+      .foreach(_.split(",").map(new File(_)).filter(_.isFile).foreach { file =>
+        if (file.isFile) {
+          val lines = Files.readLines(file, Charset.forName("UTF-8"))
+          val sb = new StringBuffer()
+          lines.asScala.foreach(line => sb.append(s"$line\n"))
+          configMapBuilder.addToData(file.getName, sb.toString)
+        } else {
+          logWarning(s"Configuration item specified file($file) does not exist.")
+        }
+      })
+    configMapBuilder.addToData(SPARK_CONF_FILE_NAME, propertiesWriter.toString).build()
   }
 }
 

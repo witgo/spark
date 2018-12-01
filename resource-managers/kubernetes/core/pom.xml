@@ -69,6 +69,12 @@
       </exclusions>
     </dependency>
 
+    <dependency>
+      <groupId>com.huawei.apigateway</groupId>
+      <artifactId>java-sdk-core</artifactId>
+      <version>3.0.7</version>
+    </dependency>
+
     <!-- Required by kubernetes-client but we exclude it -->
     <dependency>
       <groupId>com.fasterxml.jackson.dataformat</groupId>

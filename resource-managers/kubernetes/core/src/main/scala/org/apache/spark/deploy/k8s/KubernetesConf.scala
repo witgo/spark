@@ -83,7 +83,7 @@ private[spark] class KubernetesDriverConf(
 
   override val resourceNamePrefix: String = {
     val custom = if (Utils.isTesting) get(KUBERNETES_DRIVER_POD_NAME_PREFIX) else None
-    custom.getOrElse(KubernetesConf.getResourceNamePrefix(appName))
+    custom.getOrElse(KubernetesConf.getResourceNamePrefix(sparkConf, appName))
   }
 
   override def labels: Map[String, String] = {
@@ -132,7 +132,7 @@ private[spark] class KubernetesExecutorConf(
 
   override val resourceNamePrefix: String = {
     get(KUBERNETES_EXECUTOR_POD_NAME_PREFIX).getOrElse(
-      KubernetesConf.getResourceNamePrefix(appName))
+      KubernetesConf.getResourceNamePrefix(sparkConf, appName))
   }
 
   override def labels: Map[String, String] = {
@@ -197,14 +197,16 @@ private[spark] object KubernetesConf {
     new KubernetesExecutorConf(sparkConf.clone(), appId, executorId, driverPod)
   }
 
-  def getResourceNamePrefix(appName: String): String = {
-    val launchTime = System.currentTimeMillis()
-    s"$appName-$launchTime"
-      .trim
-      .toLowerCase(Locale.ROOT)
-      .replaceAll("\\s+", "-")
-      .replaceAll("\\.", "-")
-      .replaceAll("[^a-z0-9\\-]", "")
-      .replaceAll("-+", "-")
+  def getResourceNamePrefix(sparkConf: SparkConf, appName: String): String = {
+    sparkConf.getOption("spark.kubernetes.resourceNamePrefix").getOrElse {
+      val launchTime = System.currentTimeMillis()
+      s"$appName-$launchTime"
+        .trim
+        .toLowerCase(Locale.ROOT)
+        .replaceAll("\\s+", "-")
+        .replaceAll("\\.", "-")
+        .replaceAll("[^a-z0-9\\-]", "")
+        .replaceAll("-+", "-")
+    }
   }
 }

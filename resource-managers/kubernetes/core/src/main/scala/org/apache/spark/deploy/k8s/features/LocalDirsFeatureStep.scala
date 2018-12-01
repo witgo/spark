@@ -14,62 +14,32 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 package org.apache.spark.deploy.k8s.features
 
 import java.util.UUID
 
-import io.fabric8.kubernetes.api.model.{ContainerBuilder, HasMetadata, PodBuilder, VolumeBuilder, VolumeMountBuilder}
+import io.fabric8.kubernetes.api.model.HasMetadata
 
 import org.apache.spark.deploy.k8s.{KubernetesConf, SparkPod}
-import org.apache.spark.deploy.k8s.Config._
 
 private[spark] class LocalDirsFeatureStep(
     conf: KubernetesConf,
     defaultLocalDir: String = s"/var/data/spark-${UUID.randomUUID}")
   extends KubernetesFeatureConfigStep {
 
-  // Cannot use Utils.getConfiguredLocalDirs because that will default to the Java system
-  // property - we want to instead default to mounting an emptydir volume that doesn't already
-  // exist in the image.
-  // We could make utils.getConfiguredLocalDirs opinionated about Kubernetes, as it is already
-  // a bit opinionated about YARN and Mesos.
-  private val resolvedLocalDirs = Option(conf.sparkConf.getenv("SPARK_LOCAL_DIRS"))
-    .orElse(conf.getOption("spark.local.dir"))
-    .getOrElse(defaultLocalDir)
-    .split(",")
-  private val useLocalDirTmpFs = conf.get(KUBERNETES_LOCAL_DIRS_TMPFS)
+  val featureStep =
+    if (conf.sparkConf.getBoolean("spark.kubernetes.cci.local.dir.evs.enabled", false)) {
+      new EvsDirsFeatureStep(conf, defaultLocalDir)
+    } else {
+      new OriginalLocalDirsFeatureStep(conf, defaultLocalDir)
+    }
 
-  override def configurePod(pod: SparkPod): SparkPod = {
-    val localDirVolumes = resolvedLocalDirs
-      .zipWithIndex
-      .map { case (localDir, index) =>
-        new VolumeBuilder()
-          .withName(s"spark-local-dir-${index + 1}")
-          .withNewEmptyDir()
-            .withMedium(if (useLocalDirTmpFs) "Memory" else null)
-          .endEmptyDir()
-          .build()
-      }
-    val localDirVolumeMounts = localDirVolumes
-      .zip(resolvedLocalDirs)
-      .map { case (localDirVolume, localDirPath) =>
-        new VolumeMountBuilder()
-          .withName(localDirVolume.getName)
-          .withMountPath(localDirPath)
-          .build()
-      }
-    val podWithLocalDirVolumes = new PodBuilder(pod.pod)
-      .editSpec()
-        .addToVolumes(localDirVolumes: _*)
-        .endSpec()
-      .build()
-    val containerWithLocalDirVolumeMounts = new ContainerBuilder(pod.container)
-      .addNewEnv()
-        .withName("SPARK_LOCAL_DIRS")
-        .withValue(resolvedLocalDirs.mkString(","))
-        .endEnv()
-      .addToVolumeMounts(localDirVolumeMounts: _*)
-      .build()
-    SparkPod(podWithLocalDirVolumes, containerWithLocalDirVolumeMounts)
-  }
+  def configurePod(pod: SparkPod): SparkPod = featureStep.configurePod(pod)
+
+  override def getAdditionalPodSystemProperties(): Map[String, String] =
+    featureStep.getAdditionalPodSystemProperties()
+
+  override def getAdditionalKubernetesResources(): Seq[HasMetadata] =
+    featureStep.getAdditionalKubernetesResources()
 }
