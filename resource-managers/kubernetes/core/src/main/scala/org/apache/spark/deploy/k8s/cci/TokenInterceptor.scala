@@ -14,27 +14,15 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.spark.deploy.k8s
 
-private[spark] sealed trait KubernetesVolumeSpecificConf
+package org.apache.spark.deploy.k8s.cci
 
-private[spark] case class KubernetesConfigMapVolumeConf(configMapName: String)
-  extends KubernetesVolumeSpecificConf
+import okhttp3.{Interceptor, Response}
 
-private[spark] case class KubernetesHostPathVolumeConf(hostPath: String)
-  extends KubernetesVolumeSpecificConf
-
-private[spark] case class KubernetesPVCVolumeConf(claimName: String)
-  extends KubernetesVolumeSpecificConf
-
-private[spark] case class KubernetesEmptyDirVolumeConf(
-    medium: Option[String],
-    sizeLimit: Option[String])
-  extends KubernetesVolumeSpecificConf
-
-private[spark] case class KubernetesVolumeSpec(
-    volumeName: String,
-    mountPath: String,
-    mountSubPath: String,
-    mountReadOnly: Boolean,
-    volumeConf: KubernetesVolumeSpecificConf)
+class TokenInterceptor(token: String) extends Interceptor {
+  override def intercept(chain: Interceptor.Chain): Response = {
+    val request = chain.request()
+    val authReq = request.newBuilder().addHeader("X-Auth-Token", token).build()
+    chain.proceed(authReq)
+  }
+}
