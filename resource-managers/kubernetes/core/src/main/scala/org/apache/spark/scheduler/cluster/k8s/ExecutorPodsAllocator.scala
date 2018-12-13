@@ -16,9 +16,13 @@
  */
 package org.apache.spark.scheduler.cluster.k8s
 
+import java.io.IOException
+import java.util.Collections
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.{AtomicInteger, AtomicLong}
 
-import io.fabric8.kubernetes.api.model.PodBuilder
+import com.google.common.util.concurrent.Uninterruptibles
+import io.fabric8.kubernetes.api.model.{HasMetadata, OwnerReferenceBuilder, PersistentVolumeClaim, Pod, PodBuilder}
 import io.fabric8.kubernetes.client.KubernetesClient
 import scala.collection.mutable
 
@@ -54,13 +58,37 @@ private[spark] class ExecutorPodsAllocator(
 
   private val shouldDeleteExecutors = conf.get(KUBERNETES_DELETE_EXECUTORS)
 
-  private val driverPod = kubernetesDriverPodName
-    .map(name => Option(kubernetesClient.pods()
-      .withName(name)
-      .get())
-      .getOrElse(throw new SparkException(
-        s"No pod was found named $kubernetesDriverPodName in the cluster in the " +
-          s"namespace $namespace (this was supposed to be the driver pod.).")))
+  private val driverPod = getDriverPod(
+    conf.getInt("spark.kubernetes.allocation.fetchDriverPod.maxRetries", 3),
+    conf.getTimeAsMs("spark.kubernetes.allocation.fetchDriverPod.retryWaitTime", "5s"))
+
+  private def getDriverPod(
+    maxRetries: Int = 3,
+    retryWaitTime: Long = 5000,
+    retryCount: Int = 0): Option[Pod] = {
+    def shouldRetry(e: Throwable, retryCount: Int): Boolean = {
+      val isIOException = e.isInstanceOf[IOException] ||
+        (e.getCause != null && e.getCause.isInstanceOf[IOException])
+      val hasRemainingRetries = retryCount < maxRetries
+      isIOException && hasRemainingRetries
+    }
+
+    try {
+      kubernetesDriverPodName
+        .map(name => Option(kubernetesClient.pods()
+          .withName(name)
+          .get())
+          .getOrElse(throw new SparkException(
+            s"No pod was found named $kubernetesDriverPodName in the cluster in the " +
+              s"namespace $namespace (this was supposed to be the driver pod.).")))
+    } catch {
+      case e: Throwable if shouldRetry(e, retryCount) =>
+        logWarning(
+          s"Retrying fetch ($retryCount/$maxRetries) for driver Pod after $retryWaitTime ms.")
+        Uninterruptibles.sleepUninterruptibly(retryWaitTime, TimeUnit.MILLISECONDS)
+        getDriverPod(maxRetries, retryWaitTime, retryCount + 1)
+    }
+  }
 
   // Executor IDs that have been requested from Kubernetes but have not been detected in any
   // snapshot yet. Mapped to the timestamp when they were created.
@@ -138,12 +166,15 @@ private[spark] class ExecutorPodsAllocator(
             driverPod)
           val executorPod = executorBuilder.buildFromFeatures(executorConf, secMgr,
             kubernetesClient)
-          val podWithAttachedContainer = new PodBuilder(executorPod.pod)
+          val podWithAttachedContainer = new PodBuilder(executorPod.pod.pod)
             .editOrNewSpec()
-            .addToContainers(executorPod.container)
+            .addToContainers(executorPod.pod.container)
             .endSpec()
             .build()
-          kubernetesClient.pods().create(podWithAttachedContainer)
+          val createdPod = kubernetesClient.pods().create(podWithAttachedContainer)
+          val otherKubernetesResources = executorPod.executorKubernetesResources
+          addOwnerReference(createdPod, otherKubernetesResources)
+          createOrReplace(conf, otherKubernetesResources)
           newlyCreatedExecutors(newExecutorId) = clock.getTimeMillis()
           logDebug(s"Requested executor with id $newExecutorId from Kubernetes.")
         }
@@ -157,6 +188,55 @@ private[spark] class ExecutorPodsAllocator(
           s" pending status in the cluster: $currentPendingExecutors. # of executors that we have" +
           s" created but we have not observed as being present in the cluster yet:" +
           s" ${newlyCreatedExecutors.size}.")
+      }
+    }
+  }
+
+  private def createOrReplace(
+    sparkConf: SparkConf,
+    resources: Seq[HasMetadata]): Unit = {
+    if (sparkConf.getBoolean("spark.kubernetes.cci.local.dir.evs.gc.enabled", true)) {
+      kubernetesClient.resourceList(resources: _*).createOrReplace()
+    } else {
+      resources
+        .filter(_.isInstanceOf[PersistentVolumeClaim])
+        .map(_.asInstanceOf[PersistentVolumeClaim])
+        .foreach { pcv =>
+          val reloadPvc = kubernetesClient
+            .persistentVolumeClaims()
+            .withName(pcv.getMetadata.getName)
+            .fromServer()
+            .get()
+            .asInstanceOf[PersistentVolumeClaim]
+          if (reloadPvc == null) {
+            kubernetesClient.persistentVolumeClaims().create(pcv)
+          } else if (!reloadPvc.getSpec.getResources.getRequests
+            .equals(pcv.getSpec.getResources.getRequests)) {
+            kubernetesClient.persistentVolumeClaims().delete(pcv)
+            kubernetesClient.persistentVolumeClaims().create(pcv)
+          }
+        }
+      val otherKubernetesResources = resources.filter(!_.isInstanceOf[PersistentVolumeClaim])
+      kubernetesClient.resourceList(otherKubernetesResources: _*).createOrReplace()
+    }
+  }
+
+  // Add a OwnerReference to the given resources making the pod an owner of them so when
+  // the pod is deleted, the resources are garbage collected.
+  private def addOwnerReference(pod: Pod, resources: Seq[HasMetadata]): Unit = {
+    val podOwnerReference = new OwnerReferenceBuilder()
+      .withName(pod.getMetadata.getName)
+      .withApiVersion(pod.getApiVersion)
+      .withUid(pod.getMetadata.getUid)
+      .withKind(pod.getKind)
+      .withController(true)
+      .build()
+    resources.foreach { resource =>
+     val evsGc =
+       conf.getBoolean("spark.kubernetes.cci.local.dir.evs.gc.enabled", true)
+      if (!(!evsGc && resource.isInstanceOf[PersistentVolumeClaim])) {
+        val originalMetadata = resource.getMetadata
+        originalMetadata.setOwnerReferences(Collections.singletonList(podOwnerReference))
       }
     }
   }
