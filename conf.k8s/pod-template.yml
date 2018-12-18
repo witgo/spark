@@ -1,0 +1,15 @@
+apiVersion: v1
+Kind: Pod
+spec:
+  containers:
+  - image: will-be-overwritten
+    volumeMounts:
+    - name: spark-logs
+      mountPath: /opt/spark/logs
+      policy:
+        logs:
+          rotate: Weekly
+  volumes:
+  - name: spark-logs
+    localDir:
+      sizeLimit: 10Gi
